@@ -1,3 +1,4 @@
+import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeExtensionStore } from '@modules/trade-lifecycle/trade-extension.store';
 import { FakeTradeExtensionRepository } from '@modules/trade-lifecycle/testing/fake-trade-extension-repository';
@@ -54,7 +55,7 @@ describe('PaperTradeEventListener', () => {
         subscribers.set(eventName, handler);
       },
       subscribeToAll: jest.fn(),
-    };
+    } as unknown as IEventBus;
     const fakePaperAccountService = {
       rollbackReservation: jest.fn(),
       settleTrade: jest.fn(),

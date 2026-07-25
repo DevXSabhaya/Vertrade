@@ -6,7 +6,9 @@ import {
   Put,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
 import { RiskPolicyService } from './risk-policy.service';
@@ -39,15 +41,16 @@ import { KillSwitchStatus } from './models/kill-switch-status.enum';
 const DEFAULT_LIST_LIMIT = 50;
 
 /**
- * Every endpoint the Phase 11 spec lists (Part 18). No authentication guard
- * — this codebase has no auth infrastructure anywhere yet (no guards, no
- * JWT, no Passport, no API keys on any existing controller); these
- * endpoints are exactly as unauthenticated as every other controller
- * already shipped (`RecoveryController`, `TradesController`, etc.), not a
- * regression specific to this module. See the Phase 11 report's "Known
- * Limitations" for the honest statement of this gap.
+ * Every endpoint the Phase 11 spec lists (Part 18). Requires authentication
+ * (Phase 20 hardening) like every other endpoint now does — but there is no
+ * role/permission system in this codebase, so this is "any authenticated
+ * user" rather than "admin only." Kill-switch/emergency-stop/policy
+ * mutation being reachable by any logged-in user (not just an operator) is
+ * a known limitation until a role system exists; it is no longer, however,
+ * reachable by an unauthenticated caller on the open internet.
  */
 @Controller('risk')
+@UseGuards(JwtAuthGuard)
 export class RiskManagementController {
   constructor(
     private readonly riskPolicyService: RiskPolicyService,

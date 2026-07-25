@@ -1,10 +1,28 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { TradeManager } from './trade-manager.service';
 import type { TradeRecord } from './models/trade-record.model';
 import { ManualExitDto } from './dto/manual-exit.dto';
 import { ForceExitDto } from './dto/force-exit.dto';
 
+/**
+ * Global, platform-wide (not per-user) operational view — every trade in
+ * the system, regardless of owner. Requires authentication like every
+ * other endpoint, but there is no role/permission system in this codebase
+ * yet, so this is "any authenticated user" rather than "admin only"; the
+ * per-user product surface (`/paper/trades/*`) is the one regular users
+ * should use, and already enforces ownership via `PaperTradeOwnershipService`.
+ */
 @Controller('trades')
+@UseGuards(JwtAuthGuard)
 export class TradesController {
   constructor(private readonly tradeManager: TradeManager) {}
 

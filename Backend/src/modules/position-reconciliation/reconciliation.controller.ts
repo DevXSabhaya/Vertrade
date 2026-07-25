@@ -1,9 +1,12 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { PositionReconciliationService } from './position-reconciliation.service';
 import type { ReconciliationReport } from './models/reconciliation-report.model';
 import { ReconciliationReportNotFoundException } from './exceptions/reconciliation-report-not-found.exception';
 
+/** Platform-wide reconciliation controls — same "any authenticated user, no admin role yet" caveat as RiskManagementController. */
 @Controller('reconciliation')
+@UseGuards(JwtAuthGuard)
 export class ReconciliationController {
   constructor(
     private readonly positionReconciliationService: PositionReconciliationService,

@@ -1,7 +1,9 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { getConnectionToken } from '@nestjs/mongoose';
+import helmet from 'helmet';
 import type { Connection } from 'mongoose';
 import { AppModule } from './app.module';
 import { ConfigService } from '@core/config/config.service';
@@ -12,12 +14,31 @@ import { InstrumentMasterService } from '@modules/instrument-master/instrument-m
 import { MarketDataService } from '@modules/market-data/market-data.service';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+  });
   app.useWebSocketAdapter(new IoAdapter(app));
 
   const logger = app.get(LoggerService);
   app.useLogger(logger);
   app.enableShutdownHooks();
+
+  // Phase 20 hardening: this is a pure JSON/WebSocket API — no HTML/static
+  // assets are ever served (confirmed: no ServeStaticModule/Swagger in this
+  // codebase) — so Helmet's default CSP (default-src 'self') and the rest
+  // of its defaults (X-Content-Type-Options: nosniff, X-Frame-Options: DENY,
+  // Referrer-Policy, HSTS, etc.) are safe to apply as-is with no frontend
+  // compatibility risk; there's no inline script/style for a CSP to break.
+  app.use(helmet());
+
+  // Phase 20 hardening: explicit, documented body-size limits rather than
+  // relying on Express's implicit default (100kb) — no endpoint in this API
+  // accepts large payloads (trade DTOs, auth bodies, etc. are all small
+  // JSON objects), so 256kb is generous headroom while still bounding a
+  // trivial memory-exhaustion DoS via oversized request bodies.
+  app.useBodyParser('json', { limit: '256kb' });
+  app.useBodyParser('urlencoded', { limit: '256kb', extended: true });
+
   app.useGlobalFilters(new GlobalExceptionFilter(logger));
   app.useGlobalPipes(
     new ValidationPipe({

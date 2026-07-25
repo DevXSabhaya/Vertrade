@@ -32,4 +32,18 @@ describe('Health (e2e)', () => {
         expect(res.body).toMatchObject({ status: 'ok', database: 'connected' });
       });
   });
+
+  it('GET /health/ready returns readiness including tradingMode and broker status, ready in PAPER mode regardless of broker connectivity', () => {
+    return request(app.getHttpServer())
+      .get('/health/ready')
+      .expect(200)
+      .expect((res) => {
+        expect(res.body).toMatchObject({
+          status: 'ok',
+          database: 'connected',
+          tradingMode: 'PAPER',
+        });
+        expect(res.body.broker).toEqual(expect.any(String));
+      });
+  });
 });

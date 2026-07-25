@@ -1,11 +1,14 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { RecoveryService } from './recovery.service';
 import type { RecoveryHistoryEntry } from './models/recovery-history-entry.model';
 import type { RecoveryStatus } from './models/recovery-status.model';
 import type { RecoverySnapshot } from './models/recovery-snapshot.model';
 import { RecoverySnapshotNotFoundException } from './exceptions/recovery-snapshot-not-found.exception';
 
+/** Platform-wide recovery controls — same "any authenticated user, no admin role yet" caveat as RiskManagementController. */
 @Controller('recovery')
+@UseGuards(JwtAuthGuard)
 export class RecoveryController {
   constructor(private readonly recoveryService: RecoveryService) {}
 

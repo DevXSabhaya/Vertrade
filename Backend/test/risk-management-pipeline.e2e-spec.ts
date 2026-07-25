@@ -29,6 +29,8 @@ describe('Risk management pipeline (e2e)', () => {
   let killSwitchService: KillSwitchService;
   let emergencyStopService: EmergencyStopService;
   let cooldownService: CooldownService;
+  let token: string;
+  const runId = Date.now();
 
   function tradeContext(
     overrides: Partial<TradeRiskContext> = {},
@@ -59,6 +61,18 @@ describe('Risk management pipeline (e2e)', () => {
     killSwitchService = app.get(KillSwitchService);
     emergencyStopService = app.get(EmergencyStopService);
     cooldownService = app.get(CooldownService);
+
+    // Phase 20: /risk/* now requires authentication like every other
+    // endpoint — no role system exists yet, so any authenticated user can
+    // reach it (see RiskManagementController's docstring).
+    const res = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({
+        email: `risk-e2e-${runId}@example.com`,
+        password: 'risk-e2e-password-1',
+        displayName: 'Risk E2E',
+      });
+    token = res.body.accessToken as string;
   });
 
   afterEach(async () => {
@@ -115,6 +129,7 @@ describe('Risk management pipeline (e2e)', () => {
   it('activates the kill switch via the HTTP API and reflects it in GET /risk/status', async () => {
     await request(app.getHttpServer())
       .post('/risk/kill-switch/activate')
+      .set('Authorization', `Bearer ${token}`)
       .send({ status: KillSwitchStatus.TRADING_DISABLED, reason: 'e2e test' })
       .expect(201)
       .expect((res) => {
@@ -123,6 +138,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     const status = await request(app.getHttpServer())
       .get('/risk/status')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(status.body.killSwitchStatus).toBe(
       KillSwitchStatus.TRADING_DISABLED,
@@ -144,6 +160,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     await request(app.getHttpServer())
       .post('/risk/kill-switch/deactivate')
+      .set('Authorization', `Bearer ${token}`)
       .send({ deactivatedBy: 'e2e' })
       .expect(201);
 
@@ -157,6 +174,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     await request(app.getHttpServer())
       .post('/risk/emergency-stop')
+      .set('Authorization', `Bearer ${token}`)
       .send({ reason: 'e2e simulated failure' })
       .expect(201)
       .expect((res) => {
@@ -165,6 +183,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     let status = await request(app.getHttpServer())
       .get('/risk/status')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(status.body.emergencyStopActive).toBe(true);
     expect(status.body.tradingBlocked).toBe(true);
@@ -175,28 +194,37 @@ describe('Risk management pipeline (e2e)', () => {
 
     await request(app.getHttpServer())
       .post('/risk/emergency-stop/reset')
+      .set('Authorization', `Bearer ${token}`)
       .send({ resetBy: 'e2e' })
       .expect(201);
 
     // Resetting emergency stop alone must not silently re-enable trading —
     // the kill switch (still EMERGENCY_STOP) requires a separate, deliberate deactivation.
-    status = await request(app.getHttpServer()).get('/risk/status').expect(200);
+    status = await request(app.getHttpServer())
+      .get('/risk/status')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
     expect(status.body.emergencyStopActive).toBe(false);
     expect(status.body.killSwitchStatus).toBe(KillSwitchStatus.EMERGENCY_STOP);
     expect(status.body.tradingBlocked).toBe(true);
 
     await request(app.getHttpServer())
       .post('/risk/kill-switch/deactivate')
+      .set('Authorization', `Bearer ${token}`)
       .send({ deactivatedBy: 'e2e' })
       .expect(201);
 
-    status = await request(app.getHttpServer()).get('/risk/status').expect(200);
+    status = await request(app.getHttpServer())
+      .get('/risk/status')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
     expect(status.body.tradingBlocked).toBe(false);
   });
 
   it('updates the risk policy via PUT /risk/policy and reflects it in GET /risk/policy', async () => {
     await request(app.getHttpServer())
       .put('/risk/policy')
+      .set('Authorization', `Bearer ${token}`)
       .send({ maxOpenTrades: 9 })
       .expect(200)
       .expect((res) => {
@@ -205,11 +233,13 @@ describe('Risk management pipeline (e2e)', () => {
 
     const policy = await request(app.getHttpServer())
       .get('/risk/policy')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(policy.body.maxOpenTrades).toBe(9);
 
     const limits = await request(app.getHttpServer())
       .get('/risk/limits')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(limits.body.maxOpenTrades).toBe(9);
   });
@@ -219,6 +249,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     const cooldownResponse = await request(app.getHttpServer())
       .get('/risk/cooldown')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(cooldownResponse.body).not.toBeNull();
     expect(cooldownResponse.body.reason).toBe(CooldownReason.DAILY_LOSS);
@@ -231,6 +262,7 @@ describe('Risk management pipeline (e2e)', () => {
 
     const statusResponse = await request(app.getHttpServer())
       .get('/risk/status')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(statusResponse.body.cooldownActive).toBe(false);
 
@@ -250,11 +282,42 @@ describe('Risk management pipeline (e2e)', () => {
 
     const violations = await request(app.getHttpServer())
       .get('/risk/violations?limit=50')
+      .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(
       (violations.body as Array<{ rawSymbol: string }>).some(
         (v) => v.rawSymbol === rejectedSymbol,
       ),
     ).toBe(true);
+  });
+
+  describe('authentication is now required (Phase 20 hardening)', () => {
+    it('rejects GET /risk/status with no token', async () => {
+      await request(app.getHttpServer()).get('/risk/status').expect(401);
+    });
+
+    it('rejects POST /risk/kill-switch/activate with no token', async () => {
+      await request(app.getHttpServer())
+        .post('/risk/kill-switch/activate')
+        .send({
+          status: KillSwitchStatus.TRADING_DISABLED,
+          reason: 'unauthorized attempt',
+        })
+        .expect(401);
+    });
+
+    it('rejects PUT /risk/policy with no token', async () => {
+      await request(app.getHttpServer())
+        .put('/risk/policy')
+        .send({ maxOpenTrades: 1 })
+        .expect(401);
+    });
+
+    it('rejects requests with an invalid token', async () => {
+      await request(app.getHttpServer())
+        .get('/risk/status')
+        .set('Authorization', 'Bearer not-a-real-token')
+        .expect(401);
+    });
   });
 });

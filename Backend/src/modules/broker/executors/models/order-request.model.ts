@@ -15,5 +15,7 @@ export class OrderRequest {
     public readonly quantity: number,
     public readonly priceType: OrderPriceType,
     public readonly price?: number,
+    /** Carries `Trade.metadata` through (e.g. `liveTradingConfirmed`) — read by `LiveOrderSafetyGateService` in `AngelOneExecutor`. Never read by `PaperExecutor`. */
+    public readonly metadata?: Readonly<Record<string, unknown>>,
   ) {}
 }
