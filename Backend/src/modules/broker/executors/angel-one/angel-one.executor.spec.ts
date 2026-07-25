@@ -14,6 +14,7 @@ import { ExitRequest } from '../models/exit-request.model';
 import { OrderSide } from '../models/order-side.enum';
 import { OrderPriceType } from '../models/order-price-type.enum';
 import { OrderStatus } from '../models/order-status.enum';
+import type { LiveOrderSafetyGateService } from '../live-order-safety-gate.service';
 import { OrderNotFoundException } from '../exceptions/order-not-found.exception';
 import { OrderPlacementException } from '../exceptions/order-placement.exception';
 import { BrokerOrderApiException } from '../exceptions/broker-order-api.exception';
@@ -224,6 +225,15 @@ function entryRequest(): OrderRequest {
   );
 }
 
+/** Always-allow stub — these tests exercise Angel One API mechanics, not the safety gate itself (see live-order-safety-gate.service.spec.ts for that). */
+function createAlwaysAllowGate(): LiveOrderSafetyGateService {
+  return {
+    checkEntryAllowed: jest
+      .fn()
+      .mockResolvedValue({ allowed: true, reason: null }),
+  } as unknown as LiveOrderSafetyGateService;
+}
+
 describeOrderExecutorContract('AngelOneExecutor', () => {
   const server = new FakeAngelOneServer();
   const httpClient = createHttpClient(server);
@@ -235,6 +245,7 @@ describeOrderExecutorContract('AngelOneExecutor', () => {
   const executor = new AngelOneExecutor(
     createCredentialsProvider(),
     sessionManager,
+    createAlwaysAllowGate(),
     httpClient,
   );
 
@@ -266,6 +277,7 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
     executor = new AngelOneExecutor(
       createCredentialsProvider(),
       sessionManager as unknown as BrokerSessionManager,
+      createAlwaysAllowGate(),
       httpClient,
     );
   });
@@ -315,21 +327,53 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
     expect(response.status).toBe(OrderStatus.FILLED);
   });
 
-  it('wraps a network-level failure in BrokerOrderApiException', async () => {
-    httpClient.request.mockRejectedValueOnce(new TypeError('fetch failed'));
+  it('retries a transient network-level failure and wraps it in BrokerOrderApiException only once retries are exhausted', async () => {
+    httpClient.request.mockRejectedValue(new TypeError('fetch failed'));
     await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
       BrokerOrderApiException,
     );
-  });
+    // 1 initial attempt + 2 retries = 3 total calls.
+    expect(httpClient.request).toHaveBeenCalledTimes(3);
+  }, 10_000);
 
-  it('wraps a timeout in BrokerOrderApiException', async () => {
+  it('retries a timeout and wraps it in BrokerOrderApiException only once retries are exhausted', async () => {
     const timeoutError = new Error('The operation was aborted');
     timeoutError.name = 'TimeoutError';
-    httpClient.request.mockRejectedValueOnce(timeoutError);
+    httpClient.request.mockRejectedValue(timeoutError);
 
     await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
       BrokerOrderApiException,
     );
+    expect(httpClient.request).toHaveBeenCalledTimes(3);
+  }, 10_000);
+
+  it('recovers automatically from a single transient network failure — the retry itself succeeds', async () => {
+    httpClient.request.mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    const response = await executor.placeEntryOrder(entryRequest());
+
+    expect(response.status).toBe(OrderStatus.FILLED);
+    expect(httpClient.request.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('retries a 5xx broker response and recovers if a later attempt succeeds', async () => {
+    let calls = 0;
+    const realRequest = httpClient.request.getMockImplementation();
+    httpClient.request.mockImplementation((req: BrokerHttpRequest) => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve({
+          status: 503,
+          body: { status: false, message: 'Service unavailable' },
+        });
+      }
+      return Promise.resolve(realRequest!(req));
+    });
+
+    const response = await executor.placeEntryOrder(entryRequest());
+
+    expect(response.status).toBe(OrderStatus.FILLED);
+    expect(calls).toBeGreaterThan(1);
   });
 
   it('marks the original order as EXITED after exitPosition, overlaying the broker order book', async () => {
@@ -348,6 +392,68 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
     );
 
     expect(exited.brokerOrderId).not.toBe(placed.brokerOrderId);
+    expect(exited.status).toBe(OrderStatus.FILLED);
+  });
+});
+
+describe('AngelOneExecutor + LiveOrderSafetyGateService wiring', () => {
+  function blockingGate(reason: string): LiveOrderSafetyGateService {
+    return {
+      checkEntryAllowed: jest
+        .fn()
+        .mockResolvedValue({ allowed: false, reason }),
+    } as unknown as LiveOrderSafetyGateService;
+  }
+
+  it("placeEntryOrder is rejected with the gate's reason when the safety gate blocks it, and never calls the broker", async () => {
+    const server = new FakeAngelOneServer();
+    const httpClient = createHttpClient(server);
+    const sessionManager = {
+      ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
+      refresh: jest.fn().mockResolvedValue(createFakeSession()),
+    } as unknown as BrokerSessionManager;
+    const executor = new AngelOneExecutor(
+      createCredentialsProvider(),
+      sessionManager,
+      blockingGate('broker health is DEGRADED'),
+      httpClient,
+    );
+
+    await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
+      /broker health is DEGRADED/,
+    );
+    expect(httpClient.request).not.toHaveBeenCalled();
+  });
+
+  it('exitPosition still succeeds even when the safety gate would block a new entry — risk-reducing actions are never gated', async () => {
+    const server = new FakeAngelOneServer();
+    const httpClient = createHttpClient(server);
+    const sessionManager = {
+      ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
+      refresh: jest.fn().mockResolvedValue(createFakeSession()),
+    } as unknown as BrokerSessionManager;
+    // First, place an entry with an always-allow gate so there's something to exit.
+    const setupExecutor = new AngelOneExecutor(
+      createCredentialsProvider(),
+      sessionManager,
+      createAlwaysAllowGate(),
+      httpClient,
+    );
+    const placed = await setupExecutor.placeEntryOrder(entryRequest());
+
+    // Now exit using an executor instance wired to a gate that blocks every entry.
+    const blockingExecutor = new AngelOneExecutor(
+      createCredentialsProvider(),
+      sessionManager,
+      blockingGate('LIVE_TRADING_ENABLED is off'),
+      httpClient,
+    );
+
+    const exited = await blockingExecutor.exitPosition(
+      placed.brokerOrderId,
+      new ExitRequest(50),
+    );
+
     expect(exited.status).toBe(OrderStatus.FILLED);
   });
 });

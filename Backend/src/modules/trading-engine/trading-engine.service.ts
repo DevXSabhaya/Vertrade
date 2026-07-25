@@ -290,6 +290,8 @@ export class TradingEngineService {
       trade.direction === TradeDirection.LONG ? OrderSide.BUY : OrderSide.SELL,
       trade.quantity,
       OrderPriceType.MARKET,
+      undefined,
+      trade.metadata,
     );
   }
 

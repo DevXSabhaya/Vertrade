@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
+import { AuthModule } from '@modules/auth/auth.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { TradeExtensionStore } from './trade-extension.store';
@@ -42,6 +43,7 @@ import { TradeHistoryRepository } from './repository/trade-history.repository';
   imports: [
     TradingEngineModule,
     MarketDataModule,
+    AuthModule,
     MongooseModule.forFeature([
       {
         name: TradeExtensionDocumentSchema.name,

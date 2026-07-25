@@ -12,6 +12,7 @@ import {
   getPublicIp,
 } from '@modules/broker/broker-auth/utils/client-network-info.util';
 import type { IOrderExecutor } from '../order-executor.interface';
+import { LiveOrderSafetyGateService } from '../live-order-safety-gate.service';
 import { OrderRequest } from '../models/order-request.model';
 import { OrderModification } from '../models/order-modification.model';
 import { ExitRequest } from '../models/exit-request.model';
@@ -70,10 +71,30 @@ export class AngelOneExecutor implements IOrderExecutor {
   constructor(
     private readonly credentialsProvider: BrokerCredentialsProvider,
     private readonly sessionManager: BrokerSessionManager,
+    private readonly liveOrderSafetyGate: LiveOrderSafetyGateService,
     @Inject(ORDER_HTTP_CLIENT) private readonly httpClient: IBrokerHttpClient,
   ) {}
 
   async placeEntryOrder(request: OrderRequest): Promise<OrderResponse> {
+    // The last gate before a real broker call for a genuine new entry — see
+    // LiveOrderSafetyGateService's docstring. `exitPosition` deliberately
+    // calls `submitOrder` directly, bypassing this gate entirely: a
+    // risk-reducing action (closing an already-open live position) must
+    // never be blocked by a missing per-order confirmation flag or a stale
+    // health snapshot — that would turn a safety mechanism into a hazard.
+    const confirmed = request.metadata?.liveTradingConfirmed === true;
+    const gateResult =
+      await this.liveOrderSafetyGate.checkEntryAllowed(confirmed);
+    if (!gateResult.allowed) {
+      throw new OrderPlacementException(
+        `Live order blocked by safety gate: ${gateResult.reason}`,
+      );
+    }
+
+    return this.submitOrder(request);
+  }
+
+  private async submitOrder(request: OrderRequest): Promise<OrderResponse> {
     const body = buildPlaceOrderRequestBody(request);
     const responseBody = await this.request<AngelOneOrderMutationResponseBody>(
       ANGEL_ONE_PLACE_ORDER_PATH,
@@ -175,7 +196,7 @@ export class AngelOneExecutor implements IOrderExecutor {
       exitRequest.price,
     );
 
-    const exitResponse = await this.placeEntryOrder(exitOrderRequest);
+    const exitResponse = await this.submitOrder(exitOrderRequest);
     this.exitedOrderIds.add(brokerOrderId);
     return exitResponse;
   }
@@ -284,24 +305,60 @@ export class AngelOneExecutor implements IOrderExecutor {
     return response.body;
   }
 
+  /**
+   * Transient-failure retry with exponential backoff — distinct from (and
+   * layered underneath) `OrderQueueService`/`QueueWorker`'s own retry of a
+   * whole trade *submission* (`RetryStrategy`, order-queue module): that
+   * higher-level retry only ever covers the entry-order path reached via
+   * the queue, so a transient network blip during `exitPosition` (called
+   * directly by `TradingEngineService`'s tick-evaluation loop, never
+   * through the queue) previously had no retry at all — a real risk for a
+   * live position that fails to close on a momentary connectivity blip.
+   * Retries a 5xx response or a network/timeout-level throw; never retries
+   * a 4xx response (a client/validation problem retrying won't fix) or the
+   * response-shape validation failure below (a contract bug, not
+   * transient).
+   */
+  private static readonly MAX_TRANSIENT_RETRIES = 2;
+  private static readonly RETRY_BASE_DELAY_MS = 300;
+
   private async safeSend<T>(
     httpRequest: BrokerHttpRequest,
+    attempt = 1,
   ): Promise<{ status: number; body: T }> {
     try {
-      return await this.httpClient.request<T>(httpRequest);
+      const response = await this.httpClient.request<T>(httpRequest);
+      if (
+        response.status >= 500 &&
+        attempt <= AngelOneExecutor.MAX_TRANSIENT_RETRIES
+      ) {
+        await this.delayBeforeRetry(attempt);
+        return this.safeSend<T>(httpRequest, attempt + 1);
+      }
+      return response;
     } catch (error) {
       const name = this.getErrorName(error);
+      if (attempt <= AngelOneExecutor.MAX_TRANSIENT_RETRIES) {
+        await this.delayBeforeRetry(attempt);
+        return this.safeSend<T>(httpRequest, attempt + 1);
+      }
       if (name === 'TimeoutError' || name === 'AbortError') {
         throw new BrokerOrderApiException(
-          `Angel One order API request to ${httpRequest.url} timed out`,
+          `Angel One order API request to ${httpRequest.url} timed out after ${AngelOneExecutor.MAX_TRANSIENT_RETRIES} retries`,
         );
       }
       const message =
         error instanceof Error ? error.message : 'Unknown transport error';
       throw new BrokerOrderApiException(
-        `Angel One order API request failed: ${message}`,
+        `Angel One order API request failed after ${AngelOneExecutor.MAX_TRANSIENT_RETRIES} retries: ${message}`,
       );
     }
+  }
+
+  /** attempt is 1-indexed; delay grows exponentially (300ms, 600ms, ...) with no jitter — a bounded, small number of retries against a single broker HTTP call, not the queue-level retry's longer backoff. */
+  private delayBeforeRetry(attempt: number): Promise<void> {
+    const delayMs = AngelOneExecutor.RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+    return new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   private isSessionExpired(status: number, body: unknown): boolean {

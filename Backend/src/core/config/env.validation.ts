@@ -77,6 +77,45 @@ function isValidTimeOfDay(value: unknown): value is string {
   return typeof value === 'string' && HH_MM_PATTERN.test(value);
 }
 
+/** Phase 20 hardening: production requires a genuinely random secret, not merely a non-empty one — 32 chars is a practical floor for an HS256 JWT signing key / AES key-derivation passphrase. */
+const MIN_PRODUCTION_SECRET_LENGTH = 32;
+
+/**
+ * Phase 20/21 hardening: catches the exact shape of value a developer
+ * pastes into a local `.env` and then forgets to replace — never a
+ * substitute for real secret-strength validation (see
+ * `MIN_PRODUCTION_SECRET_LENGTH`), just a fast, cheap check for the most
+ * common accidental-placeholder patterns.
+ */
+const PLACEHOLDER_PATTERNS = [
+  'changeme',
+  'change-me',
+  'change_me',
+  'placeholder',
+  'your-',
+  'your_',
+  'xxxxx',
+  'example',
+  'sample',
+  'dummy',
+  'todo',
+  'fixme',
+  'replace-me',
+  'replace_me',
+  'insert-',
+  'insert_',
+];
+
+function looksLikePlaceholder(value: string): boolean {
+  const lower = value.toLowerCase();
+  return PLACEHOLDER_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
+function isLocalHost(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower.includes('localhost') || lower.includes('127.0.0.1');
+}
+
 export function validateEnv(
   config: Record<string, unknown>,
 ): EnvironmentVariables {
@@ -98,6 +137,35 @@ export function validateEnv(
     const value = config[key];
     if (typeof value !== 'string' || value.trim() === '') {
       errors.push(`${key} is required and must be a non-empty string`);
+    }
+  }
+
+  // Phase 20 hardening: a non-empty JWT_SECRET/TOKEN_ENCRYPTION_KEY is not
+  // enough in production — a short or placeholder-looking value is
+  // trivially guessable/brute-forceable. Development/test keep the looser
+  // "just non-empty" rule above so a short local dev value still boots.
+  if (nodeEnv === 'production') {
+    for (const key of ['JWT_SECRET', 'TOKEN_ENCRYPTION_KEY'] as const) {
+      const value = config[key];
+      if (typeof value === 'string' && value.trim() !== '') {
+        if (value.trim().length < MIN_PRODUCTION_SECRET_LENGTH) {
+          errors.push(
+            `${key} must be at least ${MIN_PRODUCTION_SECRET_LENGTH} characters in production (got ${value.trim().length})`,
+          );
+        }
+        if (looksLikePlaceholder(value)) {
+          errors.push(
+            `${key} looks like a placeholder value and must be replaced with a real secret in production`,
+          );
+        }
+      }
+    }
+
+    const mongodbUriRaw = config.MONGODB_URI;
+    if (typeof mongodbUriRaw === 'string' && isLocalHost(mongodbUriRaw)) {
+      errors.push(
+        'MONGODB_URI must not point at localhost/127.0.0.1 in production — configure the real production database connection string',
+      );
     }
   }
 
@@ -138,6 +206,14 @@ export function validateEnv(
       if (typeof value !== 'string' || value.trim() === '') {
         errors.push(
           `${key} is required when TRADING_MODE=LIVE and must be a non-empty string`,
+        );
+      } else if (looksLikePlaceholder(value)) {
+        // Phase 21 hardening: real money can move once TRADING_MODE=LIVE —
+        // a placeholder-shaped credential (e.g. "placeholder-api-key", the
+        // exact value this repo's own .env.example ships for Paper-only
+        // local dev) must never be silently accepted as if it were real.
+        errors.push(
+          `${key} looks like a placeholder value — TRADING_MODE=LIVE requires a real Angel One credential, not a placeholder`,
         );
       }
     }
@@ -340,10 +416,31 @@ export function validateEnv(
   // more explicitly-trusted entry, and is the only thing that matters in
   // production, where the localhost fallback never applies.
   const frontendUrlRaw = config.FRONTEND_URL;
-  const frontendUrl =
-    frontendUrlRaw === undefined || frontendUrlRaw === ''
-      ? 'http://localhost:5173'
-      : (frontendUrlRaw as string);
+  const frontendUrlProvided =
+    typeof frontendUrlRaw === 'string' && frontendUrlRaw.trim() !== '';
+  const frontendUrl = frontendUrlProvided
+    ? frontendUrlRaw
+    : 'http://localhost:5173';
+
+  // Phase 20 hardening: the localhost default above exists purely so a
+  // fresh local checkout boots without any .env edits — it must never
+  // silently stand in for a real production frontend origin. Production
+  // CORS (see cors-origin.util.ts) also permanently disables the
+  // development-only localhost/127.0.0.1 fallback, so an unset/localhost
+  // FRONTEND_URL in production would otherwise mean *no* origin is ever
+  // trusted, silently breaking every browser request rather than failing
+  // loudly at boot.
+  if (nodeEnv === 'production') {
+    if (!frontendUrlProvided) {
+      errors.push(
+        'FRONTEND_URL is required in production (no localhost default is used) — set it to the real frontend origin(s), comma-separated for more than one',
+      );
+    } else if (isLocalHost(frontendUrl)) {
+      errors.push(
+        'FRONTEND_URL must not be a localhost/127.0.0.1 origin in production',
+      );
+    }
+  }
 
   if (errors.length > 0) {
     throw new Error(

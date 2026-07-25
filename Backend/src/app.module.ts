@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ConfigModule } from '@core/config/config.module';
 import { ConfigService } from '@core/config/config.service';
 import { LoggerModule } from '@core/logger/logger.module';
@@ -37,6 +39,14 @@ import { RealtimeModule } from '@modules/realtime/realtime.module';
     LoggerModule,
     CorrelationIdModule,
     EventBusModule,
+    // Phase 20 hardening: a generous global default (every route is
+    // protected against basic abuse/DoS) — the genuinely sensitive
+    // endpoints (login, register, forgot-password, OTP verify, trade
+    // create/exit) additionally override this with much tighter
+    // per-endpoint limits via `@Throttle()`. Keyed by IP by default
+    // (ThrottlerGuard's default tracker), which is a separate dimension
+    // from PasswordResetService's existing per-email cooldown — both apply.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -71,5 +81,6 @@ import { RealtimeModule } from '@modules/realtime/realtime.module';
     AppConfigModule,
     RealtimeModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

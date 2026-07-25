@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
 import { TradeLifecycleModule } from '@modules/trade-lifecycle/trade-lifecycle.module';
+import { AuthModule } from '@modules/auth/auth.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { RiskPolicyService } from './risk-policy.service';
@@ -75,6 +76,7 @@ import { RiskViolationRepository } from './repository/risk-violation.repository'
   imports: [
     TradingEngineModule,
     TradeLifecycleModule,
+    AuthModule,
     MongooseModule.forFeature([
       { name: RiskPolicyDocumentSchema.name, schema: RiskPolicyMongooseSchema },
       {

@@ -6,6 +6,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { UsersService } from '@modules/users/users.service';
 import {
   toPublicUser,
@@ -36,11 +37,15 @@ export class AuthController {
     private readonly passwordResetService: PasswordResetService,
   ) {}
 
+  /** Phase 20 hardening: limits automated account creation from a single IP, independent of the DB-level unique-email constraint. Looser than login's limit — registration is naturally bursty (e.g. a shared-IP office/household signing up together), so this only needs to catch genuinely automated abuse, not brute-force credential guessing. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('register')
   async register(@Body() dto: RegisterDto): Promise<AuthResult> {
     return this.authService.register(dto);
   }
 
+  /** Phase 20 hardening: brute-force protection — caps credential-guessing attempts from a single IP regardless of which email is targeted. */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   async login(@Body() dto: LoginDto): Promise<AuthResult> {
     return this.authService.login(dto);
@@ -61,6 +66,8 @@ export class AuthController {
    * whose email genuinely failed to send, which is an infrastructure signal
    * the frontend needs to surface, not an account-existence leak.
    */
+  /** Phase 20 hardening: per-IP cap, independent of PasswordResetService's existing per-email resend cooldown/abuse window — this stops one IP from cycling through many different email addresses. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('forgot-password')
   @HttpCode(202)
   async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<{
@@ -84,6 +91,8 @@ export class AuthController {
    * still carries it (the backend has no server-side session of its own to
    * key off instead).
    */
+  /** Phase 20 hardening: same per-IP cap as forgot-password. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('forgot-password/resend')
   @HttpCode(202)
   async resendResetCode(@Body() dto: ForgotPasswordDto): Promise<{
@@ -100,6 +109,8 @@ export class AuthController {
     };
   }
 
+  /** Phase 20 hardening: brute-force protection against guessing the 6-digit OTP — independent of PasswordResetService's existing per-token max-attempts lockout. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('forgot-password/verify')
   @HttpCode(200)
   async verifyResetCode(

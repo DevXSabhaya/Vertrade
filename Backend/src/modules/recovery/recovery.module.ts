@@ -9,6 +9,7 @@ import { TradingEngineModule } from '@modules/trading-engine/trading-engine.modu
 import { OrderQueueModule } from '@modules/order-queue/order-queue.module';
 import { PositionReconciliationModule } from '@modules/position-reconciliation/position-reconciliation.module';
 import { RiskManagementModule } from '@modules/risk-management/risk-management.module';
+import { AuthModule } from '@modules/auth/auth.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { TIMER_SCHEDULER } from '@shared/scheduler/timer-scheduler.constants';
@@ -66,6 +67,7 @@ import { RecoveryErrorRepository } from './repository/recovery-error.repository'
     OrderQueueModule,
     PositionReconciliationModule,
     RiskManagementModule,
+    AuthModule,
     MongooseModule.forFeature([
       {
         name: RecoveryHistoryDocumentSchema.name,

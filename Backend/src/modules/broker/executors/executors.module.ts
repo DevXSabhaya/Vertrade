@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@core/config/config.module';
 import { ConfigService } from '@core/config/config.service';
+import { FeatureFlagsModule } from '@core/feature-flags/feature-flags.module';
 import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
 import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { FetchBrokerHttpClient } from '@modules/broker/broker-auth/fetch-broker-http-client';
 import type { IOrderExecutor } from './order-executor.interface';
 import { PaperExecutor } from './paper.executor';
 import { AngelOneExecutor } from './angel-one/angel-one.executor';
+import { LiveOrderSafetyGateService } from './live-order-safety-gate.service';
 import { ORDER_HTTP_CLIENT } from './angel-one/angel-one-executor.constants';
 import { ORDER_EXECUTOR } from './order-executor.constants';
 
@@ -35,11 +37,12 @@ export function selectOrderExecutor(
  * order) can still inject either directly.
  */
 @Module({
-  imports: [BrokerAuthModule, ConfigModule],
+  imports: [BrokerAuthModule, ConfigModule, FeatureFlagsModule],
   providers: [
     PaperExecutor,
     BrokerCredentialsProvider,
     { provide: ORDER_HTTP_CLIENT, useClass: FetchBrokerHttpClient },
+    LiveOrderSafetyGateService,
     AngelOneExecutor,
     {
       provide: ORDER_EXECUTOR,
@@ -52,6 +55,11 @@ export function selectOrderExecutor(
       inject: [ConfigService, PaperExecutor, AngelOneExecutor],
     },
   ],
-  exports: [PaperExecutor, AngelOneExecutor, ORDER_EXECUTOR],
+  exports: [
+    PaperExecutor,
+    AngelOneExecutor,
+    ORDER_EXECUTOR,
+    LiveOrderSafetyGateService,
+  ],
 })
 export class ExecutorsModule {}

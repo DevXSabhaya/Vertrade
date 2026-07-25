@@ -183,4 +183,164 @@ describe('validateEnv', () => {
     const env = validateEnv(smtpConfig());
     expect(env.SMTP_VERIFIED_SENDER).toBe(false);
   });
+
+  describe('Phase 20 hardening — secret strength/placeholder rejection in production', () => {
+    it('rejects a short JWT_SECRET in production, even though it would pass in development', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({ NODE_ENV: 'production', JWT_SECRET: 'short' }),
+        ),
+      ).toThrow(/JWT_SECRET must be at least 32 characters in production/);
+
+      // The exact same value boots fine outside production.
+      expect(() =>
+        validateEnv(baseConfig({ JWT_SECRET: 'short' })),
+      ).not.toThrow();
+    });
+
+    it('rejects a short TOKEN_ENCRYPTION_KEY in production', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            JWT_SECRET: 'a'.repeat(32),
+            TOKEN_ENCRYPTION_KEY: 'short',
+          }),
+        ),
+      ).toThrow(
+        /TOKEN_ENCRYPTION_KEY must be at least 32 characters in production/,
+      );
+    });
+
+    it('rejects a placeholder-shaped JWT_SECRET in production even if it is long enough', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            JWT_SECRET: 'change-me-please-change-me-please',
+            TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+          }),
+        ),
+      ).toThrow(/JWT_SECRET looks like a placeholder value/);
+    });
+
+    it('accepts a long, non-placeholder JWT_SECRET/TOKEN_ENCRYPTION_KEY in production', () => {
+      const env = validateEnv(
+        baseConfig({
+          NODE_ENV: 'production',
+          JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+          TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+          MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+          FRONTEND_URL: 'https://app.example.com',
+        }),
+      );
+      expect(env.NODE_ENV).toBe('production');
+    });
+
+    it('rejects a localhost MONGODB_URI in production', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+            TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+            MONGODB_URI: 'mongodb://localhost:27017/trading-app',
+            FRONTEND_URL: 'https://app.example.com',
+          }),
+        ),
+      ).toThrow(/MONGODB_URI must not point at localhost/);
+    });
+
+    it('allows a localhost MONGODB_URI outside production', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({ MONGODB_URI: 'mongodb://localhost:27017/dev' }),
+        ),
+      ).not.toThrow();
+    });
+  });
+
+  describe('Phase 20 hardening — FRONTEND_URL required and non-localhost in production', () => {
+    it('rejects an unset FRONTEND_URL in production (no silent localhost default)', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+            TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+            MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+          }),
+        ),
+      ).toThrow(/FRONTEND_URL is required in production/);
+    });
+
+    it('rejects a localhost FRONTEND_URL in production', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+            TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+            MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+            FRONTEND_URL: 'http://localhost:5173',
+          }),
+        ),
+      ).toThrow(/FRONTEND_URL must not be a localhost\/127\.0\.0\.1 origin/);
+    });
+
+    it('defaults to localhost outside production without error', () => {
+      const env = validateEnv(baseConfig());
+      expect(env.FRONTEND_URL).toBe('http://localhost:5173');
+    });
+  });
+
+  describe('Phase 21 hardening — LIVE mode rejects placeholder broker credentials', () => {
+    function liveConfig(overrides: Record<string, unknown> = {}) {
+      return baseConfig({
+        TRADING_MODE: 'LIVE',
+        ANGEL_ONE_API_KEY: 'real-api-key-abc123',
+        ANGEL_ONE_CLIENT_CODE: 'real-client-code',
+        ANGEL_ONE_PASSWORD: 'real-password',
+        ANGEL_ONE_TOTP_SECRET: 'JBSWY3DPEHPK3PXP',
+        ANGEL_ONE_API_SECRET: 'real-api-secret-xyz789',
+        ...overrides,
+      });
+    }
+
+    it("rejects a placeholder ANGEL_ONE_API_KEY (exactly this repo's own .env.example shape)", () => {
+      expect(() =>
+        validateEnv(liveConfig({ ANGEL_ONE_API_KEY: 'placeholder-api-key' })),
+      ).toThrow(/ANGEL_ONE_API_KEY looks like a placeholder value/);
+    });
+
+    it('rejects a "changeme"-shaped ANGEL_ONE_PASSWORD', () => {
+      expect(() =>
+        validateEnv(liveConfig({ ANGEL_ONE_PASSWORD: 'changeme123' })),
+      ).toThrow(/ANGEL_ONE_PASSWORD looks like a placeholder value/);
+    });
+
+    it('rejects a "your-..."-shaped ANGEL_ONE_CLIENT_CODE', () => {
+      expect(() =>
+        validateEnv(
+          liveConfig({ ANGEL_ONE_CLIENT_CODE: 'your-client-code-here' }),
+        ),
+      ).toThrow(/ANGEL_ONE_CLIENT_CODE looks like a placeholder value/);
+    });
+
+    it('boots successfully in LIVE mode with real-looking credentials', () => {
+      const env = validateEnv(liveConfig());
+      expect(env.TRADING_MODE).toBe('LIVE');
+    });
+
+    it('placeholder rejection applies even outside production — LIVE mode is dangerous regardless of NODE_ENV', () => {
+      expect(() =>
+        validateEnv(
+          liveConfig({
+            NODE_ENV: 'development',
+            ANGEL_ONE_API_SECRET: 'placeholder-api-secret',
+          }),
+        ),
+      ).toThrow(/ANGEL_ONE_API_SECRET looks like a placeholder value/);
+    });
+  });
 });

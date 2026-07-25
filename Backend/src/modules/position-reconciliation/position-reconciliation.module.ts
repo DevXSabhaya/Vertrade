@@ -4,6 +4,7 @@ import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
 import { ExecutorsModule } from '@modules/broker/executors/executors.module';
+import { AuthModule } from '@modules/auth/auth.module';
 import { LocalPositionProvider } from './local-position.provider';
 import { BrokerPositionProvider } from './broker-position.provider';
 import { ReconciliationEngine } from './reconciliation-engine.service';
@@ -36,6 +37,7 @@ import { RepairActionRepository } from './repository/repair-action.repository';
   imports: [
     TradingEngineModule,
     ExecutorsModule,
+    AuthModule,
     MongooseModule.forFeature([
       {
         name: ReconciliationReportDocumentSchema.name,

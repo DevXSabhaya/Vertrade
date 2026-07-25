@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { CurrentUser } from '@modules/auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '@modules/auth/models/authenticated-user.model';
@@ -27,6 +28,8 @@ import type { PaperTradeView } from '../models/paper-trade-view.model';
 export class PaperTradesController {
   constructor(private readonly paperTradingService: PaperTradingService) {}
 
+  /** Phase 20 hardening: caps rapid-fire trade submissions per user/IP — a legitimate trader never needs more than this per minute, and it bounds abuse of the margin-reservation/order-queue pipeline. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post()
   async create(
     @CurrentUser() user: AuthenticatedUser,
@@ -69,6 +72,8 @@ export class PaperTradesController {
     return this.paperTradingService.getTrade(user.userId, id);
   }
 
+  /** Phase 20 hardening: same cap as trade creation. Deliberately not a tighter limit — legitimate rapid multi-position exits (e.g. reacting to a market move) must never be needlessly throttled. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post(':id/exit')
   async exit(
     @CurrentUser() user: AuthenticatedUser,
