@@ -1,0 +1,3 @@
+export const VALIDATION_RULES = Symbol('VALIDATION_RULES');
+export const TRADING_HOURS_CONFIG = Symbol('TRADING_HOURS_CONFIG');
+export const RISK_LIMITS_CONFIG = Symbol('RISK_LIMITS_CONFIG');

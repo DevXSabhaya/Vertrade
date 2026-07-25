@@ -1,0 +1,22 @@
+/**
+ * Every state the RecoveryStateMachine can occupy, in the order the Recovery
+ * Flow (Part 2 of the Phase 9 spec) normally walks through them. `Failed` is
+ * reachable from any non-terminal state; `Completed`/`Failed` are terminal.
+ */
+export enum RecoveryState {
+  IDLE = 'IDLE',
+  STARTING = 'STARTING',
+  LOADING_CONFIG = 'LOADING_CONFIG',
+  DATABASE_CONNECTED = 'DATABASE_CONNECTED',
+  BROKER_AUTHENTICATING = 'BROKER_AUTHENTICATING',
+  BROKER_CONNECTED = 'BROKER_CONNECTED',
+  MARKET_CONNECTED = 'MARKET_CONNECTED',
+  INSTRUMENT_LOADED = 'INSTRUMENT_LOADED',
+  ENGINE_RECOVERED = 'ENGINE_RECOVERED',
+  TRADES_RECOVERED = 'TRADES_RECOVERED',
+  QUEUE_RECOVERED = 'QUEUE_RECOVERED',
+  MONITORING_RECOVERED = 'MONITORING_RECOVERED',
+  VERIFYING_POSITIONS = 'VERIFYING_POSITIONS',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+}
