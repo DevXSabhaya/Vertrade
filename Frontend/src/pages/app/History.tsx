@@ -23,16 +23,17 @@ export default function History() {
   const [statusFilter, setStatusFilter] = useState<PaperTradeStatus | 'ALL'>('ALL')
 
   useEffect(() => {
-    const timeout = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    const timeout = setTimeout(() => {
+      setDebouncedSearch(search.trim())
+      // Reset to the first page whenever the filter changes — a stale offset
+      // from a previous filter could otherwise point past the end of the
+      // new, narrower result set. Folded into this same effect (rather than
+      // a separate effect watching debouncedSearch) so it fires exactly once
+      // per actual filter change instead of an extra render-triggered pass.
+      setOffset(0)
+    }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timeout)
   }, [search])
-
-  // Reset to the first page whenever a filter changes — a stale offset from
-  // a previous filter could otherwise point past the end of the new,
-  // narrower result set.
-  useEffect(() => {
-    setOffset(0)
-  }, [debouncedSearch, statusFilter])
 
   // Filtering happens server-side now (via /paper/trades/history's
   // status/instrument query params) rather than client-side on top of an
@@ -65,7 +66,10 @@ export default function History() {
           <Select
             label="Status"
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as PaperTradeStatus | 'ALL')}
+            onChange={(event) => {
+              setStatusFilter(event.target.value as PaperTradeStatus | 'ALL')
+              setOffset(0)
+            }}
           >
             <option value="ALL">All statuses</option>
             <option value="CLOSED">Closed</option>

@@ -58,6 +58,21 @@ export class OrderQueueService implements OnModuleInit {
     const recoverable = await this.repository.findRecoverable();
     for (const snapshot of recoverable) {
       const item = QueueItem.fromSnapshot(snapshot);
+
+      if (snapshot.state === QueueItemState.SUBMITTED) {
+        // SUBMITTED means createTrade() already succeeded before the crash
+        // (resultTradeId is set) — the trade itself is rehydrated separately
+        // by Recovery's RESTORE_TRADING_ENGINE step from its own persisted
+        // snapshot. Requeuing this item like the pre-trade-creation states
+        // below would call createTrade() a second time and arm a duplicate
+        // Trade aggregate for the same idempotency key. This item's own work
+        // is done, so it is simply completed rather than replayed.
+        item.markCompleted(this.clock);
+        await this.repository.save(item.toSnapshot());
+        this.items.set(item.idempotencyKey, item);
+        continue;
+      }
+
       if (
         snapshot.state !== QueueItemState.QUEUED &&
         !QueueItemTransitions.isTerminal(snapshot.state)

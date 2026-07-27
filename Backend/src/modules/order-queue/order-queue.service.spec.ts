@@ -352,6 +352,47 @@ describe('OrderQueueService', () => {
       expect(item.lockOwner).toBeNull();
     });
 
+    it('completes a SUBMITTED item on recovery without recreating the trade', async () => {
+      const submittedSnapshot = {
+        id: 'item-submitted',
+        idempotencyKey: 'idem-submitted',
+        orderType: 'CREATE_TRADE',
+        state: QueueItemState.SUBMITTED,
+        request: buildRequest(),
+        resolvedInstrument: buildResolvedInstrument({
+          instrumentToken: 'TOKEN-SUBMITTED',
+        }),
+        attempts: 0,
+        lockOwner: 'dead-worker',
+        lockedAt: new Date(clock.now()).toISOString(),
+        lastError: null,
+        resultTradeId: 'trade-already-created',
+        history: [
+          {
+            state: QueueItemState.QUEUED,
+            occurredAt: new Date(clock.now()).toISOString(),
+          },
+        ],
+        createdAt: new Date(clock.now()).toISOString(),
+        updatedAt: new Date(clock.now()).toISOString(),
+      } as const;
+      repository.seed(
+        submittedSnapshot as unknown as Parameters<typeof repository.seed>[0],
+      );
+
+      const recoveredService = buildService();
+      await recoveredService.onModuleInit();
+      await recoveredService.drain();
+
+      const item = recoveredService.getItem('idem-submitted');
+      expect(item.state).toBe(QueueItemState.COMPLETED);
+      expect(item.lockOwner).toBeNull();
+      // The trade was already created before the crash (resultTradeId was
+      // already set) — recovery must not call createTrade() again, which
+      // would arm a second, duplicate Trade aggregate for the same order.
+      expect(tradingEngineService.createTrade).not.toHaveBeenCalled();
+    });
+
     it('does not touch an already-terminal item on recovery', async () => {
       const completedSnapshot = {
         id: 'item-done',
