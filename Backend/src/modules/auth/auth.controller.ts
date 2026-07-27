@@ -119,6 +119,8 @@ export class AuthController {
     return this.passwordResetService.verifyCode(dto.email, dto.code);
   }
 
+  /** Phase 22 hardening: brute-force protection on the final reset step — was previously covered only by the global default (100/min) while every other step in this flow has its own tighter per-IP cap. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('reset-password')
   @HttpCode(200)
   async resetPassword(

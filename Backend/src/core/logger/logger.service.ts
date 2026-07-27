@@ -10,6 +10,29 @@ interface StructuredLogEntry {
   trace?: string;
 }
 
+// Defense-in-depth only — every call site is still expected to avoid logging
+// secrets directly (e.g. via maskEmail()). This is a last-resort net that
+// catches an accidental `key: value`/`key=value` for an obviously sensitive
+// key name, or a bearer/JWT-shaped token, before it ever reaches stdout.
+const SENSITIVE_KEY_VALUE_PATTERN =
+  /\b(password|passwd|token|secret|otp|apikey|api[_-]?key|authorization|totp)\b\s*[:=]\s*"?[^\s",}]+/gi;
+const BEARER_TOKEN_PATTERN = /\bBearer\s+[A-Za-z0-9._-]+/gi;
+// Anchored on "eyJ" — the base64url encoding of `{"`, which every standard
+// JWT header starts with — so this can't accidentally match unrelated
+// dotted strings like IP addresses ("127.0.0.1") or version numbers.
+const JWT_SHAPED_PATTERN =
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
+
+function redact(message: string): string {
+  return message
+    .replace(SENSITIVE_KEY_VALUE_PATTERN, (match) => {
+      const separatorIndex = Math.max(match.indexOf(':'), match.indexOf('='));
+      return `${match.slice(0, separatorIndex + 1)} [REDACTED]`;
+    })
+    .replace(BEARER_TOKEN_PATTERN, 'Bearer [REDACTED]')
+    .replace(JWT_SHAPED_PATTERN, '[REDACTED]');
+}
+
 /**
  * Minimal structured (JSON) logger satisfying Nest's LoggerService contract.
  * Phase 1 builds the Audit/Application log split on top of this.
@@ -45,7 +68,7 @@ export class LoggerService implements NestLoggerService {
     const entry: StructuredLogEntry = {
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: redact(message),
       ...(context ? { context } : {}),
       ...(trace ? { trace } : {}),
     };

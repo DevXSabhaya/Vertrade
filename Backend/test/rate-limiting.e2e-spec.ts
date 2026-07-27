@@ -150,4 +150,28 @@ describe('Rate limiting (e2e)', () => {
       .send({ email: `rate-limit-forgot-${runId}-overlimit@example.com` });
     expect(overLimit.status).toBe(429);
   }, 30_000);
+
+  it('throttles POST /auth/reset-password after 30 requests per minute from the same IP', async () => {
+    for (let i = 0; i < 30; i += 1) {
+      const res = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({
+          email: `rate-limit-reset-${runId}@example.com`,
+          resetToken: 'a'.repeat(32),
+          newPassword: 'rate-limit-password-1',
+        });
+      // Always fails fast (400, invalid/unknown session token) without ever
+      // reaching a real reset — this test is only about the throttle count.
+      expect(res.status).toBe(400);
+    }
+
+    const overLimit = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .send({
+        email: `rate-limit-reset-${runId}@example.com`,
+        resetToken: 'a'.repeat(32),
+        newPassword: 'rate-limit-password-1',
+      });
+    expect(overLimit.status).toBe(429);
+  }, 30_000);
 });
