@@ -2,11 +2,14 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import type { Instrument } from '@modules/instrument-master/entities/instrument.entity';
+import { MarketDataService } from '@modules/market-data/market-data.service';
 import { InstrumentResolverService } from './instrument-resolver.service';
+import type { ResolvedInstrument } from './resolved-instrument.vo';
 import { ResolveInstrumentQueryDto } from './dto/resolve-instrument-query.dto';
 import { SearchInstrumentsQueryDto } from './dto/search-instruments-query.dto';
 
 interface ResolvedInstrumentResponseBody {
+  readonly underlying: string;
   readonly exchange: string;
   readonly segment: string;
   readonly tradingSymbol: string;
@@ -17,6 +20,12 @@ interface ResolvedInstrumentResponseBody {
   readonly tickSize: number;
   readonly lotSize: number;
   readonly precision: number;
+}
+
+interface ExpiryChoiceResponseBody extends ResolvedInstrumentResponseBody {
+  /** The instrument's most recently observed price, or null if no tick has arrived yet for this process — never a stale/guessed value (see MarketDataService.getLastTick). */
+  readonly currentPrice: number | null;
+  readonly lastUpdated: string | null;
 }
 
 interface InstrumentSearchResultBody {
@@ -75,14 +84,49 @@ export class InstrumentResolverController {
   constructor(
     private readonly resolverService: InstrumentResolverService,
     private readonly instrumentMasterService: InstrumentMasterService,
+    private readonly marketDataService: MarketDataService,
   ) {}
 
   @Get('resolve')
   resolve(
     @Query() dto: ResolveInstrumentQueryDto,
   ): ResolvedInstrumentResponseBody {
-    const resolved = this.resolverService.resolve(dto.query);
+    const resolved = this.resolverService.resolve(
+      dto.query,
+      dto.expiry ? new Date(dto.expiry) : undefined,
+    );
+    return this.toResponseBody(resolved);
+  }
+
+  /**
+   * Lists every live contract across all expiries for a parsed underlying/
+   * strike/optionType (e.g. "BANKNIFTY 56800 PE") — never throws on
+   * ambiguity. The frontend calls this first when a call could match more
+   * than one expiry, shows the user each exact choice (including its actual
+   * lot size and current price), and only then calls `resolve` again with
+   * the chosen expiry to lock in the exact contract for trade creation.
+   */
+  @Get('expiries')
+  expiries(
+    @Query() dto: ResolveInstrumentQueryDto,
+  ): ExpiryChoiceResponseBody[] {
+    return this.resolverService.resolveExpiries(dto.query).map((resolved) => {
+      const lastTick = this.marketDataService.getLastTick(
+        resolved.instrumentToken,
+      );
+      return {
+        ...this.toResponseBody(resolved),
+        currentPrice: lastTick?.lastPrice ?? null,
+        lastUpdated: lastTick ? lastTick.timestamp.toISOString() : null,
+      };
+    });
+  }
+
+  private toResponseBody(
+    resolved: ResolvedInstrument,
+  ): ResolvedInstrumentResponseBody {
     return {
+      underlying: resolved.underlying,
       exchange: resolved.exchange,
       segment: resolved.segment,
       tradingSymbol: resolved.tradingSymbol,

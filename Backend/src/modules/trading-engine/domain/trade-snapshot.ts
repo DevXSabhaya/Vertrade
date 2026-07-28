@@ -1,6 +1,7 @@
 import type { TradeDirection } from './trade-direction.enum';
 import type { TradeState } from './trade-state.enum';
 import type { OrderLifecycleStatus } from './order-lifecycle-status.enum';
+import type { TradingMode } from './trading-mode.type';
 
 export interface TradeHistoryEntry {
   readonly state: TradeState;
@@ -25,6 +26,7 @@ export interface TradeSnapshot {
   readonly initialStopLoss: number;
   readonly currentStopLoss: number;
   readonly targets: readonly number[];
+  readonly mode: TradingMode;
   readonly remainingTargets: readonly number[];
   readonly entryOrderId: string | null;
   readonly entryOrderLifecycle: OrderLifecycleStatus | null;

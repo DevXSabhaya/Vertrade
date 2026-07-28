@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Card } from '@/components/ui/Card'
-import { TradeStatusBadge, DirectionBadge } from '@/features/trading/StatusBadge'
+import { TradeStatusBadge, DirectionBadge, ModeBadge } from '@/features/trading/StatusBadge'
 import { TargetProgress } from './TargetProgress'
 import { TrailingStopStatus } from './TrailingStopStatus'
 import { formatCurrency, formatPnlClass, signedCurrency } from '@/lib/format'
@@ -28,6 +28,7 @@ export function TradeCard({ trade, action }: TradeCardProps) {
           <div className="mt-1 flex items-center gap-2">
             <DirectionBadge direction={trade.direction} />
             <TradeStatusBadge status={trade.status} />
+            {trade.trade && <ModeBadge mode={trade.trade.mode} />}
           </div>
         </div>
         {pnl !== null && (

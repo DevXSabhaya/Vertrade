@@ -1,9 +1,10 @@
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
-import type { ConfigService } from '@core/config/config.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { PositionManager } from './position-manager.service';
 import { TradeExtensionStore } from './trade-extension.store';
 import { PnLService } from './pnl.service';
@@ -43,7 +44,8 @@ describe('PositionManager', () => {
     clock = new FakeClock();
     tradingEngineService = new TradingEngineService(
       eventBus,
-      fakeOrderExecutor(),
+      fakeOrderExecutor() as unknown as PaperExecutor,
+      fakeOrderExecutor() as unknown as AngelOneExecutor,
       clock,
     );
     extensionRepository = new FakeTradeExtensionRepository();
@@ -55,7 +57,6 @@ describe('PositionManager', () => {
       pnlService,
       eventBus,
       clock,
-      { tradingMode: 'PAPER' } as unknown as ConfigService,
     );
     manager.onModuleInit();
   });
@@ -72,6 +73,7 @@ describe('PositionManager', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110, 120],
+      mode: 'PAPER',
       ...overrides,
     });
   }

@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
-import { ConfigService } from '@core/config/config.service';
 import { FeatureFlagsService } from '@core/feature-flags/feature-flag.service';
+import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import type { HealthSnapshot } from '@modules/broker-health/models/health-snapshot.model';
 import type { HealthSnapshotUpdatedEvent } from '@modules/broker-health/events/health-snapshot-updated.event';
@@ -42,7 +42,7 @@ export class LiveOrderSafetyGateService {
   private latestSnapshot: HealthSnapshot | null = null;
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly tradingModeService: TradingModeService,
     private readonly featureFlagsService: FeatureFlagsService,
     @Inject(EVENT_BUS) eventBus: IEventBus,
   ) {
@@ -61,10 +61,22 @@ export class LiveOrderSafetyGateService {
    * already-open live position) must never be silently blocked by a
    * missing confirmation flag or a stale health snapshot; that would turn
    * a safety mechanism into a hazard.
+   *
+   * `AngelOneExecutor.placeEntryOrder` is only ever reached for a trade
+   * whose own `mode` was already pinned to LIVE at creation time (see
+   * `TradingEngineService.executorFor`) — so the check below is not "is
+   * this deployment LIVE by default," it's "is this deployment *still*
+   * LIVE right now." An operator switching the deployment's current mode
+   * away from LIVE (`TradingModeService.setMode('PAPER', ...)`) therefore
+   * acts as an immediate brake on any further live entries from
+   * already-armed LIVE trades too — this must block, never silently pass
+   * a live order through as if the check didn't apply.
    */
   async checkEntryAllowed(confirmed: boolean): Promise<LiveOrderGateResult> {
-    if (this.configService.tradingMode !== 'LIVE') {
-      return { allowed: true, reason: null };
+    if (this.tradingModeService.getCurrentMode() !== 'LIVE') {
+      return this.blocked(
+        'This deployment is not currently in LIVE mode — a previously-armed live trade cannot place new entry orders until LIVE mode is re-enabled',
+      );
     }
 
     if (!confirmed) {

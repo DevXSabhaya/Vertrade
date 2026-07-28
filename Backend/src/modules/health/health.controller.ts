@@ -2,7 +2,7 @@ import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { InjectConnection } from '@nestjs/mongoose';
 import { ConnectionStates, type Connection } from 'mongoose';
-import { ConfigService } from '@core/config/config.service';
+import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 
@@ -25,7 +25,7 @@ interface ReadinessResponseBody {
 export class HealthController {
   constructor(
     @InjectConnection() private readonly mongooseConnection: Connection,
-    private readonly configService: ConfigService,
+    private readonly tradingModeService: TradingModeService,
     private readonly brokerHealthService: BrokerHealthService,
   ) {}
 
@@ -69,7 +69,7 @@ export class HealthController {
   @Get('ready')
   ready(@Res() res: Response): void {
     const databaseConnected = this.isDatabaseConnected();
-    const tradingMode = this.configService.tradingMode;
+    const tradingMode = this.tradingModeService.getCurrentMode();
     const brokerStatus = this.brokerHealthService.getSnapshot().overallStatus;
 
     const brokerBlocksReadiness =

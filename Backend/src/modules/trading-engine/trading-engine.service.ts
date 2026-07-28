@@ -3,7 +3,9 @@ import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
-import { ORDER_EXECUTOR } from '@modules/broker/executors/order-executor.constants';
+import { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import { selectOrderExecutor } from '@modules/broker/executors/select-order-executor.util';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
 import { OrderRequest } from '@modules/broker/executors/models/order-request.model';
 import { ExitRequest } from '@modules/broker/executors/models/exit-request.model';
@@ -22,8 +24,16 @@ import { InvalidExitRequestException } from './exceptions/invalid-exit-request.e
 /**
  * Pure domain orchestrator: creates and holds Trade aggregates in memory,
  * feeds them price updates, and translates their decisions into
- * IOrderExecutor calls — nothing else. No persistence, no HTTP, no
- * knowledge of which broker (or Paper) is behind IOrderExecutor.
+ * IOrderExecutor calls — nothing else. No persistence, no HTTP.
+ *
+ * Each trade's executor is picked once, from its own pinned `Trade.mode`
+ * (captured at creation time — see `CreateTradeParams.mode`), never from
+ * whatever the deployment's *current* trading mode happens to be at the
+ * moment an order is placed. This deliberately does NOT use the
+ * `ORDER_EXECUTOR` DI token (which resolves dynamically, current-mode-based
+ * — see `RoutingOrderExecutor`): an in-flight trade must never have its
+ * entry and exit legs split across Paper and a real broker just because an
+ * operator switched the deployment's mode mid-trade.
  */
 @Injectable()
 export class TradingEngineService {
@@ -31,7 +41,8 @@ export class TradingEngineService {
 
   constructor(
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
-    @Inject(ORDER_EXECUTOR) private readonly orderExecutor: IOrderExecutor,
+    private readonly paperExecutor: PaperExecutor,
+    private readonly angelOneExecutor: AngelOneExecutor,
     @Inject(CLOCK) private readonly clock: IClock,
   ) {
     this.eventBus.subscribe<MarketPriceUpdatedEvent>(
@@ -108,7 +119,7 @@ export class TradingEngineService {
 
     if (trade.state === TradeState.ENTRY_PENDING && trade.entryOrderId) {
       try {
-        await this.orderExecutor.cancelOrder(trade.entryOrderId);
+        await this.executorFor(trade).cancelOrder(trade.entryOrderId);
       } catch (error) {
         trade.markFailed(this.reasonOf(error), this.clock);
         this.publishDomainEvents(trade);
@@ -235,7 +246,7 @@ export class TradingEngineService {
 
     let response: OrderResponse;
     try {
-      response = await this.orderExecutor.placeEntryOrder(
+      response = await this.executorFor(trade).placeEntryOrder(
         this.buildEntryOrderRequest(trade),
       );
     } catch (error) {
@@ -257,7 +268,7 @@ export class TradingEngineService {
     trade.beginExitAttempt();
     let response: OrderResponse;
     try {
-      response = await this.orderExecutor.exitPosition(
+      response = await this.executorFor(trade).exitPosition(
         trade.entryOrderId as string,
         new ExitRequest(quantity, price),
       );
@@ -280,6 +291,15 @@ export class TradingEngineService {
         `Requested exit quantity ${quantity} is invalid for trade ${trade.id} (open quantity ${trade.openQuantity})`,
       );
     }
+  }
+
+  /** Picks the executor from the trade's own pinned `mode` — never the deployment's current mode. See this class's own docstring for why. */
+  private executorFor(trade: Trade): IOrderExecutor {
+    return selectOrderExecutor(
+      { tradingMode: trade.mode },
+      this.paperExecutor,
+      this.angelOneExecutor,
+    );
   }
 
   private buildEntryOrderRequest(trade: Trade): OrderRequest {

@@ -1,11 +1,12 @@
 import type { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import type { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
+import type { TradingMode } from '@modules/trading-engine/domain/trading-mode.type';
 import type { TradeLifecycleStage } from './trade-lifecycle-stage.enum';
 import type { TrailingConfiguration } from './trailing-configuration.model';
 import type { ExitReason } from './exit-reason.enum';
 
-/** Which executor produced/handled this trade — set once, from `ConfigService.tradingMode`, at compose time; a trade's mode never changes after creation since executor selection is a boot-time, not per-request, decision. */
-export type TradingMode = 'PAPER' | 'LIVE';
+/** Re-exported for existing callers — canonical definition now lives in `trading-engine/domain` since `Trade`/`CreateTradeParams` need it directly (see that file's own docstring). */
+export type { TradingMode };
 
 /**
  * The unified "Trade Aggregate" read model the Phase 10 spec describes —

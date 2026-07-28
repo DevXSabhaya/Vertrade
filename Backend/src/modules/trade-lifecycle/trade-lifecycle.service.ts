@@ -3,7 +3,6 @@ import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
-import { ConfigService } from '@core/config/config.service';
 import { MarketDataService } from '@modules/market-data/market-data.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { EntryFilledEvent } from '@modules/trading-engine/events/entry-filled.event';
@@ -48,7 +47,6 @@ export class TradeLifecycleService implements OnModuleInit {
     @Inject(CLOCK) private readonly clock: IClock,
     @Inject(TRADE_HISTORY_REPOSITORY)
     private readonly historyRepository: ITradeHistoryRepository,
-    private readonly configService: ConfigService,
     private readonly marketDataService: MarketDataService,
   ) {}
 
@@ -84,7 +82,6 @@ export class TradeLifecycleService implements OnModuleInit {
       extension,
       this.pnlService.getMarkPrice(snapshot.instrumentToken),
       this.clock.now().getTime(),
-      this.configService.tradingMode,
     );
     await this.historyRepository.save(record);
 

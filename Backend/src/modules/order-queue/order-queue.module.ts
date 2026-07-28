@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { TradeValidationModule } from '@modules/trade-validation/trade-validation.module';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
+import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { OrderQueueService } from './order-queue.service';
@@ -34,6 +35,7 @@ import { DEFAULT_RETRY_OPTIONS } from './models/retry-options.model';
     TradeValidationModule,
     TradingEngineModule,
     MarketDataModule,
+    TradingModeModule,
     MongooseModule.forFeature([
       { name: QueueItemDocumentSchema.name, schema: QueueItemMongooseSchema },
     ]),

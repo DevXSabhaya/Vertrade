@@ -62,6 +62,51 @@ describe('MockInstrumentMasterProvider', () => {
     );
   });
 
+  it('serves a BANKNIFTY 56800 PE contract (regression: atmStrike was stale at 52000, making this real-world strike unresolvable)', async () => {
+    const provider = new MockInstrumentMasterProvider();
+    const instruments = await provider.fetchInstruments();
+    const contract = instruments.find(
+      (i) =>
+        i.name === 'BANKNIFTY' &&
+        i.strike === 56800 &&
+        i.optionType === OptionType.PE,
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract?.exchange).toBe('NFO');
+    expect(contract?.segment).toBe('OPTIDX');
+  });
+
+  it('serves a BANKNIFTY 56800 CE contract alongside the PE at the same strike', async () => {
+    const provider = new MockInstrumentMasterProvider();
+    const instruments = await provider.fetchInstruments();
+    const contract = instruments.find(
+      (i) =>
+        i.name === 'BANKNIFTY' &&
+        i.strike === 56800 &&
+        i.optionType === OptionType.CE,
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract?.exchange).toBe('NFO');
+    expect(contract?.segment).toBe('OPTIDX');
+  });
+
+  it('serves a consistent, positive lot size for every BANKNIFTY contract, matching the configured seed value', async () => {
+    const provider = new MockInstrumentMasterProvider();
+    const instruments = await provider.fetchInstruments();
+    const bankniftyContracts = instruments.filter(
+      (i) => i.name === 'BANKNIFTY',
+    );
+
+    expect(bankniftyContracts.length).toBeGreaterThan(0);
+    const lotSizes = new Set(bankniftyContracts.map((i) => i.lotSize));
+    // Every BANKNIFTY contract (every strike/expiry/optionType) shares one
+    // lot size — the field is per-underlying, not per-contract, so a mixed
+    // set here would itself be a data-generation bug.
+    expect(lotSizes).toEqual(new Set([15]));
+  });
+
   it('includes BANKNIFTY, CRUDEOIL underlyings alongside SENSEX/NIFTY', async () => {
     const provider = new MockInstrumentMasterProvider();
     const instruments = await provider.fetchInstruments();

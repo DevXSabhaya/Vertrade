@@ -216,6 +216,23 @@ export class RealtimeGateway
         );
       });
 
+    // Without this, a client that subscribes after ticks are already
+    // flowing (the overwhelmingly common case — market data rarely starts
+    // the same instant a chart opens) would otherwise wait indefinitely for
+    // the *next* tick with no indication anything is wrong. Sent only to
+    // this joining client, never broadcast to the whole room (already-
+    // subscribed clients would otherwise see a duplicate/out-of-order tick).
+    const lastTick = this.marketDataService.getLastTick(
+      payload.instrumentToken,
+    );
+    if (lastTick) {
+      client.emit('price', {
+        instrumentToken: lastTick.instrumentToken,
+        price: lastTick.lastPrice,
+        timestamp: lastTick.timestamp,
+      });
+    }
+
     const tokens =
       this.socketInstrumentSubscriptions.get(client.id) ?? new Set();
     tokens.add(payload.instrumentToken);

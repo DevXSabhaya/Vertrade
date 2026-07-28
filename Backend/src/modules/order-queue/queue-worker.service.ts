@@ -4,6 +4,7 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { ConfigService } from '@core/config/config.service';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
+import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import type { CreateTradeParams } from '@modules/trading-engine/domain/create-trade.params';
 import { MarketDataService } from '@modules/market-data/market-data.service';
@@ -48,6 +49,7 @@ export class QueueWorker implements OnModuleDestroy {
     @Inject(QUEUE_REPOSITORY) private readonly repository: IQueueItemRepository,
     private readonly configService: ConfigService,
     private readonly marketDataService: MarketDataService,
+    private readonly tradingModeService: TradingModeService,
   ) {}
 
   /**
@@ -203,6 +205,14 @@ export class QueueWorker implements OnModuleDestroy {
     await this.processOnce(item, ownerId);
   }
 
+  /**
+   * `mode` is read here — right before `TradingEngineService.createTrade()`
+   * is actually called (`processOnce`, below) — rather than back when the
+   * item was first queued, since a queued item can wait a long time (an
+   * unfilled entry trigger, a retry backoff) before this runs. This is the
+   * one moment a trade's mode is ever decided; `Trade` pins it for its
+   * entire lifecycle from here on (see `Trade.mode`'s own docstring).
+   */
   private buildCreateTradeParams(item: QueueItem): CreateTradeParams {
     return {
       direction: item.request.direction,
@@ -212,6 +222,7 @@ export class QueueWorker implements OnModuleDestroy {
       quantity: item.request.quantity,
       entryTriggerPrice: item.request.entryTriggerPrice,
       initialStopLoss: item.request.initialStopLoss,
+      mode: this.tradingModeService.getCurrentMode(),
       targets: item.request.targets,
       metadata: item.request.metadata,
     };

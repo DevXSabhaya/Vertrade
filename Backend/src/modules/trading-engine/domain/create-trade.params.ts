@@ -1,4 +1,5 @@
 import type { TradeDirection } from './trade-direction.enum';
+import type { TradingMode } from './trading-mode.type';
 
 /**
  * Everything the Engine needs to open a Trade — the instrument identity
@@ -16,4 +17,11 @@ export interface CreateTradeParams {
   readonly initialStopLoss: number;
   readonly targets: readonly number[];
   readonly metadata?: Readonly<Record<string, unknown>>;
+  /**
+   * Captured once by the caller (`QueueWorker`, from `TradingModeService`'s
+   * *current* mode) at the exact moment this trade is created — never
+   * re-evaluated afterward. This is what pins the trade to one executor for
+   * its entire lifecycle; see `TradingEngineService.executorFor`.
+   */
+  readonly mode: TradingMode;
 }

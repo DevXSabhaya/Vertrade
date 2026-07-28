@@ -89,6 +89,9 @@ export class PaperTradingService {
         userId,
         source: 'paper-trading-api',
         isMarketOrder: dto.isMarketOrder ?? false,
+        // Read by LiveOrderSafetyGateService via AngelOneExecutor — never
+        // read by PaperExecutor, so this has no effect at all in PAPER mode.
+        liveTradingConfirmed: dto.liveTradingConfirmed ?? false,
       },
     };
 

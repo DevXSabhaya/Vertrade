@@ -14,6 +14,7 @@ function longParams(
     entryTriggerPrice: 100,
     initialStopLoss: 95,
     targets: [110, 120, 135, 150],
+    mode: 'PAPER',
     ...overrides,
   };
 }

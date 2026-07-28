@@ -66,6 +66,7 @@ export interface TradeRecord {
 }
 
 export interface ResolvedInstrument {
+  readonly underlying: string
   readonly exchange: string
   readonly segment: string
   readonly tradingSymbol: string
@@ -76,6 +77,13 @@ export interface ResolvedInstrument {
   readonly tickSize: number
   readonly lotSize: number
   readonly precision: number
+}
+
+/** One exact tradable contract among possibly several expiries for the same underlying/strike/optionType — returned by GET /instruments/expiries. */
+export interface InstrumentExpiryChoice extends ResolvedInstrument {
+  /** Most recently observed price for this exact contract, or null if no tick has arrived yet — never a stale/guessed value. */
+  readonly currentPrice: number | null
+  readonly lastUpdated: string | null
 }
 
 export interface PaperTradeView {
@@ -101,6 +109,8 @@ export interface CreatePaperTradePayload {
   readonly entryTriggerPrice: number
   readonly initialStopLoss: number
   readonly targets: number[]
+  /** Only meaningful when the deployment's trading mode is LIVE — ignored entirely in PAPER mode. Required (in addition to server-side gating) before a real broker order can ever be placed. */
+  readonly liveTradingConfirmed?: boolean
 }
 
 export type QueueItemState =

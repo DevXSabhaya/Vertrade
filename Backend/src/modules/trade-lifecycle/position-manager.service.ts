@@ -4,7 +4,6 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
-import { ConfigService } from '@core/config/config.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeStateTransitions } from '@modules/trading-engine/domain/trade-state-transitions';
 import type { TradeSnapshot } from '@modules/trading-engine/domain/trade-snapshot';
@@ -35,7 +34,6 @@ export class PositionManager implements OnModuleInit {
     private readonly pnlService: PnLService,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
     @Inject(CLOCK) private readonly clock: IClock,
-    private readonly configService: ConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -86,7 +84,6 @@ export class PositionManager implements OnModuleInit {
         extension,
         this.pnlService.getMarkPrice(snapshot.instrumentToken),
         now,
-        this.configService.tradingMode,
       );
       this.cache.set(snapshot.id, record);
     }
@@ -103,7 +100,6 @@ export class PositionManager implements OnModuleInit {
       extension,
       this.pnlService.getMarkPrice(snapshot.instrumentToken),
       this.clock.now().getTime(),
-      this.configService.tradingMode,
     );
     this.cache.set(snapshot.id, record);
     return record;

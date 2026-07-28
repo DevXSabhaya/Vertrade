@@ -20,6 +20,7 @@ function snapshot(overrides: Partial<TradeSnapshot> = {}): TradeSnapshot {
     initialStopLoss: 95,
     currentStopLoss: 95,
     targets: [110, 120],
+    mode: 'PAPER',
     remainingTargets: [110, 120],
     entryOrderId: 'E-1',
     entryOrderLifecycle: null,
