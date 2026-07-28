@@ -213,4 +213,83 @@ describe('SmtpEmailProvider', () => {
     expect(logged.responseCode).toBe(535);
     expect(loggedMessage).not.toContain('password');
   });
+
+  describe('fail-fast timeout enforcement', () => {
+    it('constructs the transport with explicit connection/greeting/socket timeouts', () => {
+      new SmtpEmailProvider(makeConfigService(), makeLogger());
+
+      expect(createTransportMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connectionTimeout: expect.any(Number),
+          greetingTimeout: expect.any(Number),
+          socketTimeout: expect.any(Number),
+        }),
+      );
+    });
+
+    it('rejects within ~10s (never hangs) when verify() never resolves', async () => {
+      jest.useFakeTimers();
+      verifyMock.mockReturnValue(new Promise(() => {})); // never settles
+      const logger = makeLogger();
+      const provider = new SmtpEmailProvider(makeConfigService(), logger);
+
+      const pending = provider.send({
+        to: 'user@example.com',
+        subject: 's',
+        text: 't',
+      });
+      const assertion = expect(pending).rejects.toThrow(
+        /SMTP connection\/authentication failed/,
+      );
+      await jest.advanceTimersByTimeAsync(10_000);
+      await assertion;
+
+      expect(sendMailMock).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('rejects within ~10s (never hangs) when sendMail() never resolves', async () => {
+      jest.useFakeTimers();
+      verifyMock.mockResolvedValue(true);
+      sendMailMock.mockReturnValue(new Promise(() => {})); // never settles
+      const logger = makeLogger();
+      const provider = new SmtpEmailProvider(makeConfigService(), logger);
+
+      const pending = provider.send({
+        to: 'user@example.com',
+        subject: 's',
+        text: 't',
+      });
+      const assertion = expect(pending).rejects.toThrow(/Failed to send email/);
+      await jest.advanceTimersByTimeAsync(10_000);
+      await assertion;
+
+      const [loggedMessage] = logger.error.mock.calls[0] as [string];
+      const logged = JSON.parse(loggedMessage) as Record<string, unknown>;
+      expect(logged.event).toBe('smtp_email_send_failed');
+      jest.useRealTimers();
+    });
+
+    it('logs verify/sendMail step timing before and after each async step', async () => {
+      sendMailMock.mockResolvedValue(undefined);
+      const logger = makeLogger();
+      const provider = new SmtpEmailProvider(makeConfigService(), logger);
+
+      await provider.send({ to: 'user@example.com', subject: 's', text: 't' });
+
+      const events = logger.log.mock.calls.map(
+        ([message]: [string, string?]) =>
+          (JSON.parse(message) as { event: string }).event,
+      );
+      expect(events).toEqual(
+        expect.arrayContaining([
+          'smtp_connection_verify_started',
+          'smtp_connection_verify_succeeded',
+          'smtp_send_mail_started',
+          'smtp_send_mail_succeeded',
+          'smtp_email_send_succeeded',
+        ]),
+      );
+    });
+  });
 });

@@ -152,6 +152,7 @@ export class PasswordResetService {
     });
 
     const maskedEmail = maskEmail(normalizedEmail);
+    const emailSendStartedAt = Date.now();
     this.logger.log(
       `password_reset_email_send_started email=${maskedEmail}`,
       'PasswordResetService',
@@ -169,11 +170,16 @@ export class PasswordResetService {
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Unknown error';
+      // `IEmailProvider.send()` is required to reject within its own bounded
+      // deadline (see `SmtpEmailProvider`'s `SMTP_OVERALL_TIMEOUT_MS`), so
+      // this catch is always reached quickly — `durationMs` here is what
+      // confirms that in production logs rather than just in tests.
       this.logger.error(
         JSON.stringify({
           event: 'password_reset_email_send_failed',
           email: maskedEmail,
           reason,
+          durationMs: Date.now() - emailSendStartedAt,
           correlationId: CorrelationIdStore.getId(),
         }),
         undefined,
@@ -184,7 +190,12 @@ export class PasswordResetService {
       );
     }
     this.logger.log(
-      `password_reset_email_send_succeeded email=${maskedEmail}`,
+      JSON.stringify({
+        event: 'password_reset_email_send_succeeded',
+        email: maskedEmail,
+        durationMs: Date.now() - emailSendStartedAt,
+        correlationId: CorrelationIdStore.getId(),
+      }),
       'PasswordResetService',
     );
 
