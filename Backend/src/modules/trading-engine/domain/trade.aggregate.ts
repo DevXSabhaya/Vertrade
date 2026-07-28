@@ -5,6 +5,7 @@ import type { OrderResponse } from '@modules/broker/executors/models/order-respo
 import type { IClock } from '@shared/clock/clock.interface';
 import { TradeDirection } from './trade-direction.enum';
 import { TradeState } from './trade-state.enum';
+import type { TradingMode } from './trading-mode.type';
 import { OrderLifecycleStatus } from './order-lifecycle-status.enum';
 import { TradeStateTransitions } from './trade-state-transitions';
 import { OrderLifecycleTransitions } from './order-lifecycle-transitions';
@@ -53,6 +54,7 @@ export class Trade {
   private readonly _entryTriggerPrice: number;
   private readonly _initialStopLoss: number;
   private readonly _targets: readonly number[];
+  private readonly _mode: TradingMode;
   private readonly _metadata: Readonly<Record<string, unknown>>;
   private readonly _createdAt: string;
   private readonly _history: TradeHistoryEntry[] = [];
@@ -90,6 +92,7 @@ export class Trade {
     this._targets = [...params.targets];
     this._remainingTargets = [...params.targets];
     this._currentStopLoss = params.initialStopLoss;
+    this._mode = params.mode;
     this._metadata = { ...(params.metadata ?? {}) };
     this._createdAt = now.toISOString();
     this._updatedAt = now.toISOString();
@@ -135,6 +138,7 @@ export class Trade {
       initialStopLoss: snapshot.initialStopLoss,
       targets: snapshot.targets,
       metadata: snapshot.metadata,
+      mode: snapshot.mode,
     };
     const trade = new Trade(snapshot.id, params, new Date(snapshot.createdAt));
 
@@ -206,6 +210,11 @@ export class Trade {
 
   get targets(): readonly number[] {
     return [...this._targets];
+  }
+
+  /** Captured once at creation — see `CreateTradeParams.mode`'s own docstring. Never changes for the lifetime of this trade, even if the deployment's current mode changes later. */
+  get mode(): TradingMode {
+    return this._mode;
   }
 
   get remainingTargets(): readonly number[] {
@@ -288,6 +297,7 @@ export class Trade {
       initialStopLoss: this._initialStopLoss,
       currentStopLoss: this._currentStopLoss,
       targets: [...this._targets],
+      mode: this._mode,
       remainingTargets: [...this._remainingTargets],
       entryOrderId: this._entryOrderId,
       entryOrderLifecycle: this._entryOrderLifecycle,

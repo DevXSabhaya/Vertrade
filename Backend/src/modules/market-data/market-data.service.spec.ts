@@ -187,6 +187,43 @@ describe('MarketDataService', () => {
         .find((e) => e instanceof MarketPriceUpdatedEvent);
       expect(published).toBeDefined();
     });
+
+    it('getLastTick returns null before any tick has arrived for that instrument', () => {
+      expect(service.getLastTick('TOKEN-NEVER-TICKED')).toBeNull();
+    });
+
+    it('getLastTick returns the most recent tick — lets a late subscriber get an immediate snapshot instead of waiting for the next tick', async () => {
+      await service.start();
+      const first = new Tick(
+        'TOKEN-1',
+        'NIFTY24500CE',
+        'NFO',
+        123.45,
+        123.4,
+        123.5,
+        100,
+        50,
+        clock.now(),
+        1,
+      );
+      const second = new Tick(
+        'TOKEN-1',
+        'NIFTY24500CE',
+        'NFO',
+        176.0,
+        175.9,
+        176.1,
+        100,
+        50,
+        clock.now(),
+        2,
+      );
+
+      provider.emitTick(first);
+      provider.emitTick(second);
+
+      expect(service.getLastTick('TOKEN-1')).toBe(second);
+    });
   });
 
   describe('subscription management', () => {

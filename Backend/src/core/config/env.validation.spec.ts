@@ -69,6 +69,38 @@ describe('validateEnv', () => {
     ).toThrow(/INSTRUMENT_MASTER_PROVIDER must be either MOCK or ANGEL_ONE/);
   });
 
+  it('defaults MARKET_DATA_PROVIDER and INSTRUMENT_MASTER_PROVIDER to ANGEL_ONE in LIVE mode — a flat MOCK default would let a live deployment silently trade/chart off synthetic data', () => {
+    const env = validateEnv(
+      baseConfig({
+        TRADING_MODE: 'LIVE',
+        ANGEL_ONE_API_KEY: 'key',
+        ANGEL_ONE_CLIENT_CODE: 'code',
+        ANGEL_ONE_PASSWORD: 'pass',
+        ANGEL_ONE_TOTP_SECRET: 'totp',
+        ANGEL_ONE_API_SECRET: 'secret',
+      }),
+    );
+    expect(env.MARKET_DATA_PROVIDER).toBe('ANGEL_ONE');
+    expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('ANGEL_ONE');
+  });
+
+  it('still honors an explicit MOCK override in LIVE mode (e.g. a rehearsal deployment)', () => {
+    const env = validateEnv(
+      baseConfig({
+        TRADING_MODE: 'LIVE',
+        MARKET_DATA_PROVIDER: 'MOCK',
+        INSTRUMENT_MASTER_PROVIDER: 'MOCK',
+        ANGEL_ONE_API_KEY: 'key',
+        ANGEL_ONE_CLIENT_CODE: 'code',
+        ANGEL_ONE_PASSWORD: 'pass',
+        ANGEL_ONE_TOTP_SECRET: 'totp',
+        ANGEL_ONE_API_SECRET: 'secret',
+      }),
+    );
+    expect(env.MARKET_DATA_PROVIDER).toBe('MOCK');
+    expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('MOCK');
+  });
+
   it('defaults EMAIL_PROVIDER to DEVELOPMENT and requires no SMTP config', () => {
     const env = validateEnv(baseConfig());
     expect(env.EMAIL_PROVIDER).toBe('DEVELOPMENT');

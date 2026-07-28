@@ -4,7 +4,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { usePositions } from '@/hooks/useTrades'
-import { TradeStatusBadge, DirectionBadge } from '@/features/trading/StatusBadge'
+import { TradeStatusBadge, DirectionBadge, ModeBadge } from '@/features/trading/StatusBadge'
 import { TradeCard } from '@/components/trading/TradeCard'
 import { formatCurrency, formatPnlClass, signedCurrency } from '@/lib/format'
 
@@ -38,6 +38,7 @@ export default function Positions() {
                   <Th>Avg. Price</Th>
                   <Th>P&amp;L</Th>
                   <Th>Status</Th>
+                  <Th>Mode</Th>
                 </TableHead>
                 <TableBody>
                   {positions.data.map((position) => (
@@ -58,6 +59,7 @@ export default function Positions() {
                       <Td>
                         <TradeStatusBadge status={position.status} />
                       </Td>
+                      <Td>{position.trade ? <ModeBadge mode={position.trade.mode} /> : '—'}</Td>
                     </tr>
                   ))}
                 </TableBody>

@@ -1,4 +1,5 @@
 import type { ConfigService } from '@core/config/config.service';
+import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import type { MarketDataService } from '@modules/market-data/market-data.service';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
@@ -54,6 +55,7 @@ describe('QueueWorker', () => {
   let metrics: QueueMetricsService;
   let repository: FakeQueueItemRepository;
   let configService: ConfigService;
+  let tradingModeService: TradingModeService;
   let worker: QueueWorker;
 
   const retryOptions = {
@@ -76,6 +78,9 @@ describe('QueueWorker', () => {
     metrics = new QueueMetricsService();
     repository = new FakeQueueItemRepository();
     configService = { killSwitchEnabled: false } as unknown as ConfigService;
+    tradingModeService = {
+      getCurrentMode: () => 'PAPER',
+    } as unknown as TradingModeService;
     worker = new QueueWorker(
       lockManager,
       tradingEngineService as unknown as TradingEngineService,
@@ -88,6 +93,7 @@ describe('QueueWorker', () => {
       {
         subscribeInstrument: () => Promise.resolve(),
       } as unknown as MarketDataService,
+      tradingModeService,
     );
   });
 
@@ -125,6 +131,7 @@ describe('QueueWorker', () => {
       repository,
       configService,
       { subscribeInstrument } as unknown as MarketDataService,
+      tradingModeService,
     );
     tradingEngineService.createTrade.mockReturnValue(
       fakeTradeSnapshot('trade-sub-1'),
@@ -156,6 +163,7 @@ describe('QueueWorker', () => {
       repository,
       configService,
       { subscribeInstrument } as unknown as MarketDataService,
+      tradingModeService,
     );
     tradingEngineService.createTrade.mockReturnValue(
       fakeTradeSnapshot('trade-sub-2'),
@@ -332,6 +340,7 @@ describe('QueueWorker', () => {
         {
           subscribeInstrument: () => Promise.resolve(),
         } as unknown as MarketDataService,
+        tradingModeService,
       );
       const item = buildItem(clock);
 

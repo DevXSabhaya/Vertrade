@@ -1,7 +1,8 @@
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
-import type { ConfigService } from '@core/config/config.service';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
@@ -58,7 +59,12 @@ describe('ExitManager', () => {
       exitPosition: jest.fn(),
       getOrderStatus: jest.fn(),
     };
-    tradingEngineService = new TradingEngineService(eventBus, executor, clock);
+    tradingEngineService = new TradingEngineService(
+      eventBus,
+      executor as unknown as PaperExecutor,
+      executor as unknown as AngelOneExecutor,
+      clock,
+    );
     extensionStore = new TradeExtensionStore(
       new FakeTradeExtensionRepository(),
       clock,
@@ -70,7 +76,6 @@ describe('ExitManager', () => {
       pnlService,
       eventBus,
       clock,
-      { tradingMode: 'PAPER' } as unknown as ConfigService,
     );
     manager.onModuleInit();
   });
@@ -85,6 +90,7 @@ describe('ExitManager', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110, 120],
+      mode: 'PAPER',
       ...overrides,
     });
     await tradingEngineService.handleMarketPriceUpdate(

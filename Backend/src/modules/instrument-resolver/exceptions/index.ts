@@ -6,3 +6,4 @@ export { MissingExpiryException } from './missing-expiry.exception';
 export { ExpiredContractException } from './expired-contract.exception';
 export { AmbiguousInstrumentException } from './ambiguous-instrument.exception';
 export { DuplicateInstrumentException } from './duplicate-instrument.exception';
+export { ExpiryNotAvailableException } from './expiry-not-available.exception';

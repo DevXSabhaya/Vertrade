@@ -113,6 +113,41 @@ describe('Instrument resolver preview (e2e)', () => {
       .expect(400);
   });
 
+  describe('GET /instruments/expiries', () => {
+    it('rejects unauthenticated requests', async () => {
+      await request(app.getHttpServer())
+        .get('/instruments/expiries')
+        .query({ query: 'BANKNIFTY 56800 PE' })
+        .expect(401);
+    });
+
+    it('lists every live expiry for a real natural trading call, with lot size and (absent any ticks yet) a null current price', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/instruments/expiries')
+        .set('Authorization', `Bearer ${token}`)
+        .query({ query: 'BANKNIFTY 56800 PE' })
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+      const contract = res.body[0];
+      expect(contract.strike).toBe(56800);
+      expect(contract.optionType).toBe('PE');
+      expect(contract.lotSize).toEqual(expect.any(Number));
+      expect(contract.expiry).toEqual(expect.any(String));
+      expect(contract).toHaveProperty('currentPrice');
+      expect(contract).toHaveProperty('lastUpdated');
+    });
+
+    it('never throws for an ambiguous underlying/strike — returns an empty-safe error only for a genuinely invalid strike', async () => {
+      await request(app.getHttpServer())
+        .get('/instruments/expiries')
+        .set('Authorization', `Bearer ${token}`)
+        .query({ query: 'SENSEX 1 CE' })
+        .expect(400);
+    });
+  });
+
   describe('GET /instruments/search', () => {
     it('rejects unauthenticated requests', async () => {
       await request(app.getHttpServer())

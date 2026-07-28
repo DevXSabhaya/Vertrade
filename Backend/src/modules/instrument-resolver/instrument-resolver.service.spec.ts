@@ -13,6 +13,7 @@ import { MissingExpiryException } from './exceptions/missing-expiry.exception';
 import { ExpiredContractException } from './exceptions/expired-contract.exception';
 import { AmbiguousInstrumentException } from './exceptions/ambiguous-instrument.exception';
 import { DuplicateInstrumentException } from './exceptions/duplicate-instrument.exception';
+import { ExpiryNotAvailableException } from './exceptions/expiry-not-available.exception';
 
 const FUTURE_EXPIRY = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 const PAST_EXPIRY = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -95,6 +96,51 @@ describe('InstrumentResolverService', () => {
     );
   });
 
+  it('resolves BANKNIFTY 56800 PE — a real, non-ATM strike, not just the option-type/underlying happy path SENSEX already covers', () => {
+    seed([option('T3', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY)]);
+
+    const resolved = resolver.resolve('BANKNIFTY 56800 PE');
+
+    expect(resolved.instrumentToken).toBe('T3');
+    expect(resolved.tradingSymbol).toBe('BANKNIFTY56800PE');
+    expect(resolved.strike).toBe(56800);
+    expect(resolved.optionType).toBe(OptionType.PE);
+  });
+
+  it('resolves BANKNIFTY 56800 CE — same strike as the PE regression case, opposite option type, both must resolve independently', () => {
+    seed([
+      option('T3-PE', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY),
+      option('T3-CE', 'BANKNIFTY', 56800, OptionType.CE, FUTURE_EXPIRY),
+    ]);
+
+    const resolved = resolver.resolve('BANKNIFTY 56800 CE');
+
+    expect(resolved.instrumentToken).toBe('T3-CE');
+    expect(resolved.tradingSymbol).toBe('BANKNIFTY56800CE');
+    expect(resolved.strike).toBe(56800);
+    expect(resolved.optionType).toBe(OptionType.CE);
+  });
+
+  it('resolves NIFTY 25000 CE and returns the lot size unchanged from the underlying instrument record', () => {
+    const contract = option(
+      'T-NIFTY',
+      'NIFTY',
+      25000,
+      OptionType.CE,
+      FUTURE_EXPIRY,
+    );
+    seed([contract]);
+
+    const resolved = resolver.resolve('NIFTY 25000 CE');
+
+    expect(resolved.instrumentToken).toBe('T-NIFTY');
+    expect(resolved.strike).toBe(25000);
+    expect(resolved.optionType).toBe(OptionType.CE);
+    // Lot size must pass through byte-for-byte from the Instrument record —
+    // never recomputed, guessed, or defaulted by the resolver.
+    expect(resolved.lotSize).toBe(contract.lotSize);
+  });
+
   it('resolves a plain non-option underlying like BankNifty', () => {
     seed([nonOption('T2', 'BANKNIFTY')]);
     const resolved = resolver.resolve('BankNifty');
@@ -143,6 +189,90 @@ describe('InstrumentResolverService', () => {
     expect(() => resolver.resolve('Sensex 77200 CE')).toThrow(
       AmbiguousInstrumentException,
     );
+  });
+
+  it('resolves the exact contract when an explicit expiry disambiguates multiple candidates — never silently picks one', () => {
+    const laterExpiry = new Date(
+      FUTURE_EXPIRY.getTime() + 7 * 24 * 60 * 60 * 1000,
+    );
+    seed([
+      option('T1-EARLY', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY),
+      option('T1-LATE', 'BANKNIFTY', 56800, OptionType.PE, laterExpiry),
+    ]);
+
+    const resolved = resolver.resolve('BANKNIFTY 56800 PE', laterExpiry);
+
+    expect(resolved.instrumentToken).toBe('T1-LATE');
+    expect(resolved.expiry?.getTime()).toBe(laterExpiry.getTime());
+  });
+
+  it('throws ExpiryNotAvailableException when an explicit expiry matches no candidate', () => {
+    seed([option('T1', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY)]);
+
+    const wrongExpiry = new Date(
+      FUTURE_EXPIRY.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+
+    expect(() => resolver.resolve('BANKNIFTY 56800 PE', wrongExpiry)).toThrow(
+      ExpiryNotAvailableException,
+    );
+  });
+
+  describe('resolveExpiries', () => {
+    it('lists every live contract across all expiries for the same underlying/strike/optionType, soonest first — never throws on ambiguity', () => {
+      const laterExpiry = new Date(
+        FUTURE_EXPIRY.getTime() + 7 * 24 * 60 * 60 * 1000,
+      );
+      const evenLaterExpiry = new Date(
+        FUTURE_EXPIRY.getTime() + 21 * 24 * 60 * 60 * 1000,
+      );
+      seed([
+        option('T-LATE', 'BANKNIFTY', 56800, OptionType.PE, laterExpiry),
+        option('T-EARLY', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY),
+        option(
+          'T-EVEN-LATER',
+          'BANKNIFTY',
+          56800,
+          OptionType.PE,
+          evenLaterExpiry,
+        ),
+      ]);
+
+      const results = resolver.resolveExpiries('BANKNIFTY 56800 PE');
+
+      expect(results.map((r) => r.instrumentToken)).toEqual([
+        'T-EARLY',
+        'T-LATE',
+        'T-EVEN-LATER',
+      ]);
+    });
+
+    it('excludes an expired contract from the list', () => {
+      seed([
+        option('T-EXPIRED', 'BANKNIFTY', 56800, OptionType.PE, PAST_EXPIRY),
+        option('T-LIVE', 'BANKNIFTY', 56800, OptionType.PE, FUTURE_EXPIRY),
+      ]);
+
+      const results = resolver.resolveExpiries('BANKNIFTY 56800 PE');
+
+      expect(results.map((r) => r.instrumentToken)).toEqual(['T-LIVE']);
+    });
+
+    it('returns a single-element list when only one expiry exists — the same contract resolve() would return', () => {
+      seed([option('T1', 'SENSEX', 77200, OptionType.CE, FUTURE_EXPIRY)]);
+
+      const results = resolver.resolveExpiries('SENSEX 77200 CE');
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.instrumentToken).toBe('T1');
+    });
+
+    it('still throws InvalidStrikeException for a genuinely invalid strike', () => {
+      seed([option('T1', 'SENSEX', 77200, OptionType.CE, FUTURE_EXPIRY)]);
+      expect(() => resolver.resolveExpiries('Sensex 77300 CE')).toThrow(
+        InvalidStrikeException,
+      );
+    });
   });
 
   it('throws DuplicateInstrumentException when two identical contracts share the same expiry', () => {

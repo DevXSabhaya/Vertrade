@@ -58,8 +58,16 @@ const INDEX_OPTIONS: readonly IndexSeed[] = [
     exchange: 'NFO',
     segment: 'OPTIDX',
     strikeStep: 100,
-    strikeCount: 25,
-    atmStrike: 52000,
+    // Wider than the other index ladders (35 vs 25 strikes either side of
+    // ATM): BankNifty's real-world level drifts by thousands of points over
+    // a few months, and a monthly-expiry-only mock (see nextMonthlyExpiry())
+    // never regenerates until the app restarts — a stale but plausible
+    // atmStrike previously left strikes like 56800 permanently unresolvable
+    // ("Strike 56800 is not available for 'BANKNIFTY PE'") even though nothing
+    // was wrong with the resolver itself. A wider ladder gives more headroom
+    // before atmStrike needs to be bumped again.
+    strikeCount: 35,
+    atmStrike: 56800,
     lotSize: 15,
   },
   {

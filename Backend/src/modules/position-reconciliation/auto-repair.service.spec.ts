@@ -3,6 +3,8 @@ import { TradingEngineService } from '@modules/trading-engine/trading-engine.ser
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
 import { AutoRepairService } from './auto-repair.service';
@@ -62,7 +64,14 @@ describe('AutoRepairService', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      },
+      } as unknown as PaperExecutor,
+      {
+        placeEntryOrder: jest.fn(),
+        modifyOrder: jest.fn(),
+        cancelOrder: jest.fn(),
+        exitPosition: jest.fn(),
+        getOrderStatus: jest.fn(),
+      } as unknown as AngelOneExecutor,
       clock,
     );
     service = new AutoRepairService(
@@ -129,7 +138,8 @@ describe('AutoRepairService', () => {
       };
       const engineWithControlledExecutor = new TradingEngineService(
         eventBus,
-        executor,
+        executor as unknown as PaperExecutor,
+        executor as unknown as AngelOneExecutor,
         clock,
       );
       const pending = engineWithControlledExecutor.createTrade({
@@ -141,6 +151,7 @@ describe('AutoRepairService', () => {
         entryTriggerPrice: 100,
         initialStopLoss: 95,
         targets: [110],
+        mode: 'PAPER',
       });
       await engineWithControlledExecutor.handleMarketPriceUpdate(
         pending.instrumentToken,

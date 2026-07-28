@@ -2,6 +2,8 @@ import { TradingEngineService } from '@modules/trading-engine/trading-engine.ser
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { LocalPositionProvider } from './local-position.provider';
 
 class FixedClock {
@@ -21,15 +23,17 @@ describe('LocalPositionProvider', () => {
       subscribe: jest.fn(),
       subscribeToAll: jest.fn(),
     };
+    const executor = {
+      placeEntryOrder: jest.fn(),
+      modifyOrder: jest.fn(),
+      cancelOrder: jest.fn(),
+      exitPosition: jest.fn(),
+      getOrderStatus: jest.fn(),
+    };
     tradingEngineService = new TradingEngineService(
       eventBus,
-      {
-        placeEntryOrder: jest.fn(),
-        modifyOrder: jest.fn(),
-        cancelOrder: jest.fn(),
-        exitPosition: jest.fn(),
-        getOrderStatus: jest.fn(),
-      },
+      executor as unknown as PaperExecutor,
+      executor as unknown as AngelOneExecutor,
       new FixedClock(),
     );
     provider = new LocalPositionProvider(tradingEngineService);
@@ -45,6 +49,7 @@ describe('LocalPositionProvider', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110],
+      mode: 'PAPER',
     });
 
     const positions = provider.getOpenPositions();
@@ -62,6 +67,7 @@ describe('LocalPositionProvider', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110],
+      mode: 'PAPER',
     });
     await tradingEngineService.cancelTrade(snapshot.id, 'test');
 

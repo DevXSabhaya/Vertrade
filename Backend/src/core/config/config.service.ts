@@ -61,6 +61,24 @@ export class ConfigService {
     return this.nestConfigService.get('TRADING_MODE', { infer: true });
   }
 
+  /**
+   * Presence only (non-empty strings) — not a placeholder/strength check
+   * (that already happened at boot in `env.validation.ts` if `TRADING_MODE`
+   * started as `LIVE`). Used by `TradingModeService` to give a clear,
+   * specific error when an operator tries to switch to LIVE at runtime on a
+   * deployment that only ever configured Paper — `BrokerSessionManager`
+   * would eventually fail anyway, but this catches the common case fast
+   * without an unnecessary network round trip.
+   */
+  get hasAngelOneCredentials(): boolean {
+    return (
+      this.angelOneApiKey.trim() !== '' &&
+      this.angelOneClientCode.trim() !== '' &&
+      this.angelOnePassword.trim() !== '' &&
+      this.angelOneTotpSecret.trim() !== ''
+    );
+  }
+
   get killSwitchEnabled(): boolean {
     return this.nestConfigService.get('KILL_SWITCH_ENABLED', { infer: true });
   }

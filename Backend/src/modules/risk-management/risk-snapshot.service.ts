@@ -57,6 +57,7 @@ export class RiskSnapshotService {
         initialStopLoss: record.stopLoss,
         currentStopLoss: record.currentStopLoss,
         targets: record.targets,
+        mode: record.mode,
         remainingTargets: [],
         entryOrderId: record.brokerOrderId,
         entryOrderLifecycle: null,

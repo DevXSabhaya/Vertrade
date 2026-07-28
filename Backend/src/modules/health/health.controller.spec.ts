@@ -1,7 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { Response } from 'express';
 import { ConnectionStates, type Connection } from 'mongoose';
-import type { ConfigService } from '@core/config/config.service';
+import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import type { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import { HealthController } from './health.controller';
@@ -22,8 +22,10 @@ function connection(state: ConnectionStates): Connection {
   return { readyState: state } as unknown as Connection;
 }
 
-function configService(tradingMode: 'PAPER' | 'LIVE'): ConfigService {
-  return { tradingMode } as unknown as ConfigService;
+function tradingModeService(mode: 'PAPER' | 'LIVE'): TradingModeService {
+  return {
+    getCurrentMode: () => mode,
+  } as unknown as TradingModeService;
 }
 
 function brokerHealthService(overallStatus: HealthStatus): BrokerHealthService {
@@ -37,7 +39,7 @@ describe('HealthController', () => {
     it('returns 200 and status "ok" when the database is connected', () => {
       const controller = new HealthController(
         connection(ConnectionStates.connected),
-        configService('PAPER'),
+        tradingModeService('PAPER'),
         brokerHealthService(HealthStatus.UNKNOWN),
       );
       const response = createMockResponse();
@@ -53,7 +55,7 @@ describe('HealthController', () => {
     it('returns 503 and status "error" when the database is disconnected', () => {
       const controller = new HealthController(
         connection(ConnectionStates.disconnected),
-        configService('PAPER'),
+        tradingModeService('PAPER'),
         brokerHealthService(HealthStatus.UNKNOWN),
       );
       const response = createMockResponse();
@@ -71,7 +73,7 @@ describe('HealthController', () => {
     it('liveness never depends on broker health, even in LIVE mode with a disconnected broker', () => {
       const controller = new HealthController(
         connection(ConnectionStates.connected),
-        configService('LIVE'),
+        tradingModeService('LIVE'),
         brokerHealthService(HealthStatus.DISCONNECTED),
       );
       const response = createMockResponse();
@@ -86,7 +88,7 @@ describe('HealthController', () => {
     it('is ready in PAPER mode regardless of broker health — Paper never depends on a broker', () => {
       const controller = new HealthController(
         connection(ConnectionStates.connected),
-        configService('PAPER'),
+        tradingModeService('PAPER'),
         brokerHealthService(HealthStatus.DISCONNECTED),
       );
       const response = createMockResponse();
@@ -106,7 +108,7 @@ describe('HealthController', () => {
     it('is ready in LIVE mode only when broker health is HEALTHY', () => {
       const controller = new HealthController(
         connection(ConnectionStates.connected),
-        configService('LIVE'),
+        tradingModeService('LIVE'),
         brokerHealthService(HealthStatus.HEALTHY),
       );
       const response = createMockResponse();
@@ -122,7 +124,7 @@ describe('HealthController', () => {
     it('is NOT ready in LIVE mode when broker health is not HEALTHY', () => {
       const controller = new HealthController(
         connection(ConnectionStates.connected),
-        configService('LIVE'),
+        tradingModeService('LIVE'),
         brokerHealthService(HealthStatus.DEGRADED),
       );
       const response = createMockResponse();
@@ -143,7 +145,7 @@ describe('HealthController', () => {
     it('is not ready when the database is disconnected, even in PAPER mode', () => {
       const controller = new HealthController(
         connection(ConnectionStates.disconnected),
-        configService('PAPER'),
+        tradingModeService('PAPER'),
         brokerHealthService(HealthStatus.UNKNOWN),
       );
       const response = createMockResponse();

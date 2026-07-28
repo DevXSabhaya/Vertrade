@@ -1,4 +1,5 @@
 import type { ConfigService } from '@core/config/config.service';
+import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import type { MarketDataService } from '@modules/market-data/market-data.service';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { TradeValidationService } from '@modules/trade-validation/trade-validation.service';
@@ -94,6 +95,7 @@ describe('OrderQueueService', () => {
       {
         subscribeInstrument: () => Promise.resolve(),
       } as unknown as MarketDataService,
+      { getCurrentMode: () => 'PAPER' } as unknown as TradingModeService,
     );
     service = buildService();
   });

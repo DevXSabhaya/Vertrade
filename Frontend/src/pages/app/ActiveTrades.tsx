@@ -9,7 +9,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useToast } from '@/components/ui/Toast'
 import { useActiveTrades, useExitTrade, useCancelTrade } from '@/hooks/useTrades'
-import { TradeStatusBadge, DirectionBadge } from '@/features/trading/StatusBadge'
+import { TradeStatusBadge, DirectionBadge, ModeBadge } from '@/features/trading/StatusBadge'
 import { TradeCard } from '@/components/trading/TradeCard'
 import { formatCurrency, formatPnlClass, signedCurrency } from '@/lib/format'
 import { getErrorMessage } from '@/lib/error-message'
@@ -87,6 +87,7 @@ export default function ActiveTrades() {
                   <Th>Symbol</Th>
                   <Th>Direction</Th>
                   <Th>Status</Th>
+                  <Th>Mode</Th>
                   <Th>Entry</Th>
                   <Th>Stop Loss</Th>
                   <Th>Qty</Th>
@@ -103,6 +104,7 @@ export default function ActiveTrades() {
                       <Td>
                         <TradeStatusBadge status={trade.status} />
                       </Td>
+                      <Td>{trade.trade ? <ModeBadge mode={trade.trade.mode} /> : '—'}</Td>
                       <Td>{formatCurrency(trade.entryTriggerPrice)}</Td>
                       <Td>{formatCurrency(trade.trade?.currentStopLoss ?? trade.initialStopLoss)}</Td>
                       <Td>{trade.quantity}</Td>

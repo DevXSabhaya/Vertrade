@@ -3,6 +3,8 @@ import { EventEmitterEventBus } from '@core/event-bus/event-emitter-event-bus';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { IClock } from '@shared/clock/clock.interface';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import type { OrderRequest } from '@modules/broker/executors/models/order-request.model';
 import type { ExitRequest } from '@modules/broker/executors/models/exit-request.model';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
@@ -124,6 +126,7 @@ function tradeParams(
     entryTriggerPrice: 100,
     initialStopLoss: 95,
     targets: [110, 120, 135, 150],
+    mode: 'PAPER',
     ...overrides,
   };
 }
@@ -144,7 +147,12 @@ describe('TradingEngineService', () => {
     };
     executor = new FakeOrderExecutor();
     clock = new FakeClock();
-    service = new TradingEngineService(eventBus, executor, clock);
+    service = new TradingEngineService(
+      eventBus,
+      executor as unknown as PaperExecutor,
+      executor as unknown as AngelOneExecutor,
+      clock,
+    );
   });
 
   it('creates a trade in WAITING_ENTRY and publishes TradeCreatedEvent', () => {
@@ -434,7 +442,12 @@ describe('TradingEngineService', () => {
   describe('restoreTrade (Phase 9 — Startup Recovery)', () => {
     it('rehydrates a persisted snapshot into the in-memory map', () => {
       const snapshot = service.createTrade(tradeParams());
-      const freshService = new TradingEngineService(eventBus, executor, clock);
+      const freshService = new TradingEngineService(
+        eventBus,
+        executor as unknown as PaperExecutor,
+        executor as unknown as AngelOneExecutor,
+        clock,
+      );
 
       expect(freshService.hasTrade(snapshot.id)).toBe(false);
       freshService.restoreTrade(snapshot);
@@ -455,7 +468,12 @@ describe('TradingEngineService', () => {
 
     it('never publishes any event on its own', () => {
       const snapshot = service.createTrade(tradeParams());
-      const freshService = new TradingEngineService(eventBus, executor, clock);
+      const freshService = new TradingEngineService(
+        eventBus,
+        executor as unknown as PaperExecutor,
+        executor as unknown as AngelOneExecutor,
+        clock,
+      );
       publishSpy.mockClear();
 
       freshService.restoreTrade(snapshot);
@@ -542,7 +560,12 @@ describe('TradingEngineService', () => {
   describe('wiring: real event bus dispatches to handleMarketPriceUpdate', () => {
     it('processes a MarketPriceUpdatedEvent published through the real event bus', async () => {
       const realBus = new EventEmitterEventBus(new EventEmitter2());
-      const wiredService = new TradingEngineService(realBus, executor, clock);
+      const wiredService = new TradingEngineService(
+        realBus,
+        executor as unknown as PaperExecutor,
+        executor as unknown as AngelOneExecutor,
+        clock,
+      );
       const snapshot = wiredService.createTrade(tradeParams());
 
       realBus.publish(
@@ -551,6 +574,95 @@ describe('TradingEngineService', () => {
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(wiredService.getTrade(snapshot.id).state).toBe(TradeState.ACTIVE);
+    });
+  });
+
+  describe('per-trade executor routing', () => {
+    let paperExecutor: FakeOrderExecutor;
+    let angelOneExecutor: FakeOrderExecutor;
+    let routingService: TradingEngineService;
+
+    beforeEach(() => {
+      paperExecutor = new FakeOrderExecutor();
+      angelOneExecutor = new FakeOrderExecutor();
+      routingService = new TradingEngineService(
+        eventBus,
+        paperExecutor as unknown as PaperExecutor,
+        angelOneExecutor as unknown as AngelOneExecutor,
+        clock,
+      );
+    });
+
+    it("routes a PAPER-mode trade's entry to PaperExecutor only, never AngelOneExecutor", async () => {
+      const snapshot = routingService.createTrade(
+        tradeParams({ mode: 'PAPER', instrumentToken: 'TOKEN-PAPER' }),
+      );
+
+      await routingService.handleMarketPriceUpdate('TOKEN-PAPER', 100);
+
+      expect(paperExecutor.placeEntryOrderCalls).toHaveLength(1);
+      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(0);
+      expect(routingService.getTrade(snapshot.id).state).toBe(
+        TradeState.ACTIVE,
+      );
+    });
+
+    it("routes a LIVE-mode trade's entry to AngelOneExecutor only, never PaperExecutor", async () => {
+      const snapshot = routingService.createTrade(
+        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-LIVE' }),
+      );
+
+      await routingService.handleMarketPriceUpdate('TOKEN-LIVE', 100);
+
+      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(1);
+      expect(paperExecutor.placeEntryOrderCalls).toHaveLength(0);
+      expect(routingService.getTrade(snapshot.id).state).toBe(
+        TradeState.ACTIVE,
+      );
+    });
+
+    it('two trades created with different modes each keep using their own executor for their whole lifecycle — no cross-contamination', async () => {
+      const paperTrade = routingService.createTrade(
+        tradeParams({ mode: 'PAPER', instrumentToken: 'TOKEN-A' }),
+      );
+      const liveTrade = routingService.createTrade(
+        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-B' }),
+      );
+
+      await routingService.handleMarketPriceUpdate('TOKEN-A', 100);
+      await routingService.handleMarketPriceUpdate('TOKEN-B', 100);
+
+      expect(paperExecutor.placeEntryOrderCalls).toHaveLength(1);
+      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(1);
+
+      // Exit each — still must stay on its own originally-pinned executor.
+      await routingService.requestFullExit(paperTrade.id, 110);
+      await routingService.requestFullExit(liveTrade.id, 110);
+
+      expect(paperExecutor.exitPositionCalls).toHaveLength(1);
+      expect(angelOneExecutor.exitPositionCalls).toHaveLength(1);
+    });
+
+    it('cancelling a LIVE-mode trade before entry fills routes cancelOrder to AngelOneExecutor, not PaperExecutor', async () => {
+      angelOneExecutor.nextEntryResponse = new OrderResponse(
+        'LIVE-PENDING-1',
+        OrderStatus.OPEN,
+        0,
+        null,
+        new Date(),
+      );
+      const snapshot = routingService.createTrade(
+        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-CANCEL' }),
+      );
+      await routingService.handleMarketPriceUpdate('TOKEN-CANCEL', 100);
+      expect(routingService.getTrade(snapshot.id).state).toBe(
+        TradeState.ENTRY_PENDING,
+      );
+
+      await routingService.cancelTrade(snapshot.id, 'user requested');
+
+      expect(angelOneExecutor.cancelOrderCalls).toHaveLength(1);
+      expect(paperExecutor.cancelOrderCalls).toHaveLength(0);
     });
   });
 });

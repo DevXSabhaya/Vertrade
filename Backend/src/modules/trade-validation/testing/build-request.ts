@@ -35,5 +35,6 @@ export function buildResolvedInstrument(
     0.05,
     overrides.lotSize ?? 50,
     2,
+    'NIFTY',
   );
 }

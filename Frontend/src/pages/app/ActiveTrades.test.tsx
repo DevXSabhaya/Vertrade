@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/test-utils'
 import ActiveTrades from './ActiveTrades'
 import { tradingService } from '@/services/trading.service'
-import type { PaperTradeView } from '@/types/trading'
+import type { PaperTradeView, TradeRecord } from '@/types/trading'
 
 vi.mock('@/services/trading.service')
 
@@ -23,6 +23,41 @@ function openTrade(): PaperTradeView {
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     trade: null,
+  }
+}
+
+function engineTradeRecord(overrides: Partial<TradeRecord> = {}): TradeRecord {
+  return {
+    tradeId: 'engine-trade-1',
+    signalId: null,
+    brokerOrderId: null,
+    brokerPositionId: null,
+    instrument: 'RELIANCE-EQ',
+    exchange: 'NSE',
+    token: 'MOCK-EQ-RELIANCE',
+    direction: 'LONG',
+    entryPrice: 100,
+    quantity: 10,
+    filledQuantity: 10,
+    openQuantity: 10,
+    exitedQuantity: 0,
+    averagePrice: 100,
+    exitPrice: null,
+    status: 'ACTIVE',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    targets: [110],
+    currentTarget: 0,
+    stopLoss: 95,
+    currentStopLoss: 95,
+    trailingEnabled: false,
+    riskReward: 2,
+    realizedPnl: null,
+    unrealizedPnl: 50,
+    exitReason: null,
+    positionDurationMs: 0,
+    mode: 'PAPER',
+    ...overrides,
   }
 }
 
@@ -66,6 +101,15 @@ describe('ActiveTrades page', () => {
     await vi.waitFor(() => {
       expect(tradingService.exit).toHaveBeenCalledWith('trade-1')
     })
+  })
+
+  it("shows the trade's own execution mode from the engine record, once it has one — never assuming the deployment's current mode", async () => {
+    vi.mocked(tradingService.active).mockResolvedValue([
+      { ...openTrade(), trade: engineTradeRecord({ mode: 'PAPER' }) },
+    ])
+    renderWithProviders(<ActiveTrades />, { initialEntries: ['/app/active-trades'] })
+
+    expect(await screen.findAllByText('PAPER')).not.toHaveLength(0)
   })
 
   it('closing the confirmation dialog without confirming never calls exit', async () => {

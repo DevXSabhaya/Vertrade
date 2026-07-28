@@ -3,7 +3,6 @@ import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
-import { ConfigService } from '@core/config/config.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeStateTransitions } from '@modules/trading-engine/domain/trade-state-transitions';
 import { StopLossHitEvent } from '@modules/trading-engine/events/stop-loss-hit.event';
@@ -35,7 +34,6 @@ export class ExitManager implements OnModuleInit {
     private readonly pnlService: PnLService,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
     @Inject(CLOCK) private readonly clock: IClock,
-    private readonly configService: ConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -118,7 +116,6 @@ export class ExitManager implements OnModuleInit {
       extension,
       markPrice,
       this.clock.now().getTime(),
-      this.configService.tradingMode,
     );
   }
 
@@ -152,7 +149,6 @@ export class ExitManager implements OnModuleInit {
       extension,
       markPrice,
       this.clock.now().getTime(),
-      this.configService.tradingMode,
     );
   }
 

@@ -1,11 +1,12 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { ConfigService } from '@core/config/config.service';
 import type { MarketDataService } from '@modules/market-data/market-data.service';
 import { EventEmitterEventBus } from '@core/event-bus/event-emitter-event-bus';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
 import { EntryFilledEvent } from '@modules/trading-engine/events/entry-filled.event';
@@ -46,7 +47,8 @@ function buildHarness() {
   };
   const tradingEngineService = new TradingEngineService(
     eventBus,
-    executor,
+    executor as unknown as PaperExecutor,
+    executor as unknown as AngelOneExecutor,
     clock,
   );
   const extensionStore = new TradeExtensionStore(
@@ -62,7 +64,6 @@ function buildHarness() {
     eventBus,
     clock,
     historyRepository,
-    { tradingMode: 'PAPER' } as unknown as ConfigService,
     {
       unsubscribeInstrument: () => Promise.resolve(),
     } as unknown as MarketDataService,
@@ -116,6 +117,7 @@ describe('TradeLifecycleService', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110],
+      mode: 'PAPER',
     });
 
     eventBus.publish(new TradeCancelledEvent(snapshot.id, 'user requested'));
@@ -145,6 +147,7 @@ describe('TradeLifecycleService', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110],
+      mode: 'PAPER',
     });
     await tradingEngineService.handleMarketPriceUpdate(
       snapshot.instrumentToken,

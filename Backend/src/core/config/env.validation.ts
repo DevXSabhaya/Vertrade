@@ -169,10 +169,28 @@ export function validateEnv(
     }
   }
 
+  const tradingModeRaw = config.TRADING_MODE;
+  const tradingMode =
+    tradingModeRaw === undefined || tradingModeRaw === ''
+      ? 'PAPER'
+      : tradingModeRaw;
+  if (!isValidTradingMode(tradingMode)) {
+    errors.push('TRADING_MODE must be either PAPER or LIVE');
+  }
+
+  // Defaulting these to a flat 'MOCK' regardless of TRADING_MODE let a real
+  // LIVE deployment silently run on synthetic/mock instrument and price data
+  // whenever an operator forgot to also set these two — indistinguishable
+  // from real Angel One data to both the operator and the frontend. Only the
+  // *default* (unset) case is tied to TRADING_MODE; an explicit override
+  // still wins either way, e.g. pointing a LIVE deployment's market data at
+  // MOCK for a rehearsal remains possible if deliberately configured.
   const marketDataProviderRaw = config.MARKET_DATA_PROVIDER;
   const marketDataProvider =
     marketDataProviderRaw === undefined || marketDataProviderRaw === ''
-      ? 'MOCK'
+      ? tradingMode === 'LIVE'
+        ? 'ANGEL_ONE'
+        : 'MOCK'
       : marketDataProviderRaw;
   if (!isValidMarketDataProvider(marketDataProvider)) {
     errors.push('MARKET_DATA_PROVIDER must be either MOCK or ANGEL_ONE');
@@ -182,19 +200,12 @@ export function validateEnv(
   const instrumentMasterProvider =
     instrumentMasterProviderRaw === undefined ||
     instrumentMasterProviderRaw === ''
-      ? 'MOCK'
+      ? tradingMode === 'LIVE'
+        ? 'ANGEL_ONE'
+        : 'MOCK'
       : instrumentMasterProviderRaw;
   if (!isValidMarketDataProvider(instrumentMasterProvider)) {
     errors.push('INSTRUMENT_MASTER_PROVIDER must be either MOCK or ANGEL_ONE');
-  }
-
-  const tradingModeRaw = config.TRADING_MODE;
-  const tradingMode =
-    tradingModeRaw === undefined || tradingModeRaw === ''
-      ? 'PAPER'
-      : tradingModeRaw;
-  if (!isValidTradingMode(tradingMode)) {
-    errors.push('TRADING_MODE must be either PAPER or LIVE');
   }
 
   // Real broker credentials are only ever a hard requirement once LIVE

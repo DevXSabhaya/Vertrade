@@ -127,6 +127,32 @@ describe('PaperTradingService', () => {
       expect(bus.publish).toHaveBeenCalledTimes(1);
     });
 
+    it('defaults liveTradingConfirmed to false in metadata when omitted', async () => {
+      const { service, orderQueueService } = buildService({});
+
+      await service.createTrade('user-1', dto());
+
+      expect(orderQueueService.submitTrade).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ liveTradingConfirmed: false }),
+        }),
+        'user-1',
+      );
+    });
+
+    it('threads an explicit liveTradingConfirmed: true through into metadata — this is the only way AngelOneExecutor will ever place a real entry order (LiveOrderSafetyGateService requires it in addition to the LIVE_TRADING_ENABLED flag and a healthy broker)', async () => {
+      const { service, orderQueueService } = buildService({});
+
+      await service.createTrade('user-1', dto({ liveTradingConfirmed: true }));
+
+      expect(orderQueueService.submitTrade).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ liveTradingConfirmed: true }),
+        }),
+        'user-1',
+      );
+    });
+
     it('never calls submitTrade when the account has insufficient balance', async () => {
       const paperAccount = paperAccountService({
         reserveMargin: jest

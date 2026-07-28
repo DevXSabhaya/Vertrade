@@ -1,5 +1,5 @@
 import type { IOrderExecutor } from './order-executor.interface';
-import { selectOrderExecutor } from './executors.module';
+import { selectOrderExecutor } from './select-order-executor.util';
 
 describe('selectOrderExecutor', () => {
   const paperExecutor = { name: 'paper' } as unknown as IOrderExecutor;

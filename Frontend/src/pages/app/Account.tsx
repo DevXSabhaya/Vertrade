@@ -7,9 +7,338 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { useToast } from '@/components/ui/Toast'
 import { useAccountSummary, useResetPaperBalance } from '@/hooks/useAccount'
+import {
+  useBrokerAccountSummary,
+  useBrokerStatus,
+  useConnectBroker,
+  useDisconnectBroker,
+  useSetTradingMode,
+  useTradingMode,
+} from '@/hooks/useTradingMode'
 import { useAuth } from '@/store/auth-context'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 import { getErrorMessage } from '@/lib/error-message'
+import type { TradingMode } from '@/types/config'
+
+const AUTH_STATUS_LABEL: Record<string, string> = {
+  HEALTHY: 'Authenticated',
+  WARNING: 'Degraded',
+  DEGRADED: 'Degraded',
+  DISCONNECTED: 'Disconnected',
+  RECOVERING: 'Reconnecting',
+  MAINTENANCE: 'Maintenance',
+  UNKNOWN: 'Unknown',
+}
+
+/**
+ * Lets the user switch the deployment's persisted trading mode
+ * (`POST /config/trading-mode`). Every safety check — LIVE readiness,
+ * broker credentials, live broker session — runs server-side in
+ * `TradingModeService.setMode`; this component only surfaces the result
+ * (success or the specific rejection reason), it never second-guesses or
+ * retries around a failure. Switching modes only affects trades created
+ * from this point on — any trade already in flight keeps the executor it
+ * was pinned to at creation.
+ */
+function TradingModeCard() {
+  const tradingMode = useTradingMode()
+  const setTradingMode = useSetTradingMode()
+  const toast = useToast()
+  const [pendingTarget, setPendingTarget] = useState<TradingMode | null>(null)
+
+  async function confirmSwitch() {
+    const target = pendingTarget
+    if (!target) return
+    try {
+      await setTradingMode.mutateAsync(target)
+      toast.show(
+        target === 'LIVE' ? 'Switched to Live Trading.' : 'Switched to Paper Trading.',
+        'success',
+      )
+    } catch (error) {
+      toast.show(getErrorMessage(error, 'Could not switch trading mode.'), 'error')
+    } finally {
+      setPendingTarget(null)
+    }
+  }
+
+  const currentMode = tradingMode.data?.tradingMode
+
+  return (
+    <Card>
+      <CardHeading>Trading Mode</CardHeading>
+      {tradingMode.isLoading || !tradingMode.data ? (
+        <Skeleton className="mt-4 h-16 w-full" />
+      ) : (
+        <>
+          <p className="mt-2 text-xs text-ink-500">
+            Controls which executor every new trade in this deployment uses. Paper trading never
+            places real broker orders; Live trading requires a valid broker connection.
+          </p>
+          <div className="mt-4 flex gap-2">
+            <Button
+              size="sm"
+              variant={currentMode === 'PAPER' ? 'primary' : 'secondary'}
+              disabled={currentMode === 'PAPER'}
+              onClick={() => setPendingTarget('PAPER')}
+            >
+              Paper Trading
+            </Button>
+            <Button
+              size="sm"
+              variant={currentMode === 'LIVE' ? 'primary' : 'secondary'}
+              disabled={currentMode === 'LIVE'}
+              onClick={() => setPendingTarget('LIVE')}
+            >
+              Live Trading
+            </Button>
+          </div>
+          {tradingMode.data.defaultTradingMode !== currentMode && (
+            <p className="mt-3 text-xs text-ink-400">
+              Deployment default is {tradingMode.data.defaultTradingMode === 'LIVE' ? 'Live' : 'Paper'}
+              ; this override is active until changed again.
+            </p>
+          )}
+        </>
+      )}
+
+      <Modal
+        isOpen={pendingTarget !== null}
+        onClose={() => setPendingTarget(null)}
+        title={pendingTarget === 'LIVE' ? 'Switch to Live Trading?' : 'Switch to Paper Trading?'}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPendingTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={pendingTarget === 'LIVE' ? 'danger' : 'primary'}
+              isLoading={setTradingMode.isPending}
+              onClick={() => void confirmSwitch()}
+            >
+              Confirm
+            </Button>
+          </>
+        }
+      >
+        {pendingTarget === 'LIVE' ? (
+          <>
+            New trades will place real orders through your connected broker using real money. The
+            switch will be rejected if broker credentials aren&apos;t configured or a live broker
+            session can&apos;t be established.
+          </>
+        ) : (
+          <>
+            New trades will run in the paper sandbox and never reach a real broker. Any trade
+            already in progress is unaffected.
+          </>
+        )}
+      </Modal>
+    </Card>
+  )
+}
+
+function BrokerConnectionCard() {
+  const tradingMode = useTradingMode()
+  const brokerStatus = useBrokerStatus()
+  const accountSummary = useBrokerAccountSummary()
+  const connectBroker = useConnectBroker()
+  const disconnectBroker = useDisconnectBroker()
+  const toast = useToast()
+
+  async function handleConnect() {
+    try {
+      await connectBroker.mutateAsync()
+      toast.show('Broker connected.', 'success')
+    } catch (error) {
+      toast.show(getErrorMessage(error, 'Could not connect the broker.'), 'error')
+    }
+  }
+
+  async function handleDisconnect() {
+    try {
+      await disconnectBroker.mutateAsync()
+      toast.show('Broker disconnected.', 'success')
+    } catch (error) {
+      toast.show(getErrorMessage(error, 'Could not disconnect the broker.'), 'error')
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeading>Broker Connection</CardHeading>
+      {brokerStatus.isLoading || tradingMode.isLoading ? (
+        <Skeleton className="mt-4 h-24 w-full" />
+      ) : brokerStatus.isError || !brokerStatus.data ? (
+        <div className="mt-4">
+          <ErrorState
+            message="Couldn't load broker status."
+            onRetry={() => brokerStatus.refetch()}
+          />
+        </div>
+      ) : (
+        <>
+          <dl className="mt-4 flex flex-col gap-3 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Mode</dt>
+              <dd className="font-medium text-ink-900">
+                {brokerStatus.data.tradingMode === 'LIVE' ? 'Live Trading' : 'Paper Trading'}
+              </dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Broker</dt>
+              <dd className="font-medium text-ink-900">Angel One</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Connection</dt>
+              <dd
+                className={`inline-flex items-center gap-1.5 font-medium ${
+                  brokerStatus.data.connected ? 'text-gain-600' : 'text-ink-500'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    brokerStatus.data.connected ? 'bg-gain-500' : 'bg-ink-300'
+                  }`}
+                  aria-hidden="true"
+                />
+                {brokerStatus.data.connected ? 'Connected' : 'Not connected'}
+              </dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Auth status</dt>
+              <dd className="font-medium text-ink-900">
+                {AUTH_STATUS_LABEL[brokerStatus.data.authStatus] ?? brokerStatus.data.authStatus}
+              </dd>
+            </div>
+            {brokerStatus.data.tradingMode === 'LIVE' && (
+              <>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Market data</dt>
+                  <dd className="font-medium text-ink-900">
+                    {AUTH_STATUS_LABEL[brokerStatus.data.marketDataCapability] ??
+                      brokerStatus.data.marketDataCapability}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Order execution</dt>
+                  <dd className="font-medium text-ink-900">
+                    {AUTH_STATUS_LABEL[brokerStatus.data.orderExecutionCapability] ??
+                      brokerStatus.data.orderExecutionCapability}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Last connected</dt>
+                  <dd className="font-medium text-ink-900">
+                    {brokerStatus.data.lastSuccessfulConnectionAt
+                      ? formatDateTime(brokerStatus.data.lastSuccessfulConnectionAt)
+                      : '—'}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Last health check</dt>
+                  <dd className="font-medium text-ink-900">
+                    {brokerStatus.data.lastHealthCheckAt
+                      ? formatDateTime(brokerStatus.data.lastHealthCheckAt)
+                      : '—'}
+                  </dd>
+                </div>
+              </>
+            )}
+            {brokerStatus.data.clientCode && (
+              <div className="flex justify-between">
+                <dt className="text-ink-500">Client code</dt>
+                <dd className="font-mono text-xs text-ink-900">{brokerStatus.data.clientCode}</dd>
+              </div>
+            )}
+            {brokerStatus.data.tradingMode === 'PAPER' && (
+              <p className="mt-1 text-xs text-ink-400">
+                Paper trading never connects to a real broker — no live credentials are used while
+                this mode is active.
+              </p>
+            )}
+          </dl>
+
+          {brokerStatus.data.tradingMode === 'LIVE' && (
+            <div className="mt-5 flex gap-2 border-t border-ink-100 pt-5">
+              <Button
+                size="sm"
+                isLoading={connectBroker.isPending}
+                disabled={brokerStatus.data.connected}
+                onClick={() => void handleConnect()}
+              >
+                {brokerStatus.data.connected ? 'Connected' : 'Connect'}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                isLoading={disconnectBroker.isPending}
+                disabled={!brokerStatus.data.connected}
+                onClick={() => void handleDisconnect()}
+              >
+                Disconnect
+              </Button>
+            </div>
+          )}
+
+          {brokerStatus.data.tradingMode === 'LIVE' && (
+            <div className="mt-5 border-t border-ink-100 pt-5">
+              <h3 className="text-sm font-semibold text-ink-900">Account Summary</h3>
+              {accountSummary.isLoading ? (
+                <Skeleton className="mt-3 h-20 w-full" />
+              ) : accountSummary.data && !accountSummary.data.supported ? (
+                <p className="mt-2 text-xs text-ink-400">{accountSummary.data.reason}</p>
+              ) : accountSummary.data ? (
+                <dl className="mt-3 flex flex-col gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Available balance</dt>
+                    <dd className="font-medium text-ink-900">
+                      {accountSummary.data.availableBalance !== null
+                        ? formatCurrency(accountSummary.data.availableBalance)
+                        : 'Unsupported'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Used margin</dt>
+                    <dd className="font-medium text-ink-900">
+                      {accountSummary.data.usedMargin !== null
+                        ? formatCurrency(accountSummary.data.usedMargin)
+                        : 'Unsupported'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Available margin</dt>
+                    <dd className="font-medium text-ink-900">
+                      {accountSummary.data.availableMargin !== null
+                        ? formatCurrency(accountSummary.data.availableMargin)
+                        : 'Unsupported'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Today&apos;s realized P&amp;L</dt>
+                    <dd className="font-medium text-ink-900">
+                      {accountSummary.data.todaysRealizedPnl !== null
+                        ? formatCurrency(accountSummary.data.todaysRealizedPnl)
+                        : 'Unsupported'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Unrealized P&amp;L</dt>
+                    <dd className="font-medium text-ink-900">
+                      {accountSummary.data.unrealizedPnl !== null
+                        ? formatCurrency(accountSummary.data.unrealizedPnl)
+                        : 'Unsupported'}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
 
 export default function Account() {
   const { user } = useAuth()
@@ -120,6 +449,9 @@ export default function Account() {
             </Button>
           </div>
         </Card>
+
+        <TradingModeCard />
+        <BrokerConnectionCard />
       </div>
 
       <Modal

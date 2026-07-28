@@ -1,29 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import { instrumentService } from '@/services/instrument.service'
 import { getErrorMessage } from '@/lib/error-message'
-import type { ResolvedInstrument } from '@/types/trading'
+import type { InstrumentExpiryChoice } from '@/types/trading'
 
 const DEBOUNCE_MS = 400
 
-interface UseResolveInstrumentResult {
-  readonly resolved: ResolvedInstrument | null
+interface UseInstrumentExpiriesResult {
+  /** Every live contract for the parsed underlying/strike/optionType, across every expiry — empty until a query resolves. */
+  readonly choices: InstrumentExpiryChoice[]
   readonly isResolving: boolean
   readonly error: string | null
 }
 
 /**
- * Live preview for the "trading call" input (e.g. "SENSEX 77200 CE") —
- * debounced so it doesn't hit the backend on every keystroke, and abortable
- * so a stale in-flight request can never overwrite a newer one. Never
- * fabricates a resolution client-side: `resolved` is only ever exactly what
- * `GET /instruments/resolve` returned. Every state update happens inside a
- * callback (the debounce timer or a fetch promise), never synchronously in
- * the effect body itself, so the previous result/error intentionally stays
- * on screen until the debounce fires rather than flashing empty on every
- * keystroke.
+ * Live preview for the "trading call" input (e.g. "BANKNIFTY 56800 PE"),
+ * expiry-aware: calls `GET /instruments/expiries`, which never throws on
+ * ambiguity, so a call matching more than one live expiry comes back as a
+ * list instead of an error. Callers decide what to do with more than one
+ * choice (show a picker); this hook never guesses which one the user meant.
+ * Debounced so it doesn't hit the backend on every keystroke, and abortable
+ * so a stale in-flight request can never overwrite a newer one.
  */
-export function useResolveInstrument(query: string): UseResolveInstrumentResult {
-  const [resolved, setResolved] = useState<ResolvedInstrument | null>(null)
+export function useInstrumentExpiries(query: string): UseInstrumentExpiriesResult {
+  const [choices, setChoices] = useState<InstrumentExpiryChoice[]>([])
   const [isResolving, setIsResolving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -32,24 +31,27 @@ export function useResolveInstrument(query: string): UseResolveInstrumentResult 
     const timer = setTimeout(() => {
       const trimmed = query.trim()
       if (trimmed.length === 0) {
-        setResolved(null)
+        setChoices([])
         setError(null)
         setIsResolving(false)
         return
       }
 
       setIsResolving(true)
-      setResolved(null)
+      setChoices([])
       setError(null)
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
 
       instrumentService
-        .resolve(trimmed, controller.signal)
+        .expiries(trimmed, controller.signal)
         .then((result) => {
-          setResolved(result)
+          setChoices(result)
           setIsResolving(false)
+          if (result.length === 0) {
+            setError('No tradable contract found for this call.')
+          }
         })
         .catch((err: unknown) => {
           if (err instanceof DOMException && err.name === 'AbortError') return
@@ -64,5 +66,5 @@ export function useResolveInstrument(query: string): UseResolveInstrumentResult 
     }
   }, [query])
 
-  return { resolved, isResolving, error }
+  return { choices, isResolving, error }
 }

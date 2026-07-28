@@ -3,6 +3,8 @@ import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { DomainEvent } from '@core/event-bus/events/domain-event.base';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import type { OrderQueueService } from '@modules/order-queue/order-queue.service';
 import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { MarketPriceUpdatedEvent } from '@shared/events/market-price-updated.event';
@@ -61,7 +63,14 @@ describe('RecoverySnapshotService', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      },
+      } as unknown as PaperExecutor,
+      {
+        placeEntryOrder: jest.fn(),
+        modifyOrder: jest.fn(),
+        cancelOrder: jest.fn(),
+        exitPosition: jest.fn(),
+        getOrderStatus: jest.fn(),
+      } as unknown as AngelOneExecutor,
       clock,
     );
     orderQueueService = { getAllItems: jest.fn().mockReturnValue([]) };
@@ -94,6 +103,7 @@ describe('RecoverySnapshotService', () => {
         entryTriggerPrice: 100,
         initialStopLoss: 95,
         targets: [110],
+        mode: 'PAPER',
       });
       orderQueueService.getAllItems.mockReturnValue([
         { idempotencyKey: 'key-1' } as never,

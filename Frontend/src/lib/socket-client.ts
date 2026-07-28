@@ -18,6 +18,15 @@ export function getSocket(): Socket {
     auth: { token: getToken() },
     transports: ['websocket'],
     autoConnect: true,
+    // Explicit rather than relying on socket.io-client's defaults (which
+    // happen to match these values today) — a disconnected socket must
+    // always retry with backoff rather than give up, and a future
+    // socket.io-client upgrade changing its defaults must never silently
+    // change that.
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1_000,
+    reconnectionDelayMax: 5_000,
   })
   return socket
 }

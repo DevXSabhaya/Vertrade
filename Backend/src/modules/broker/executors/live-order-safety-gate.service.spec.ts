@@ -3,8 +3,8 @@ import { EventEmitterEventBus } from '@core/event-bus/event-emitter-event-bus';
 import { HealthSnapshotUpdatedEvent } from '@modules/broker-health/events/health-snapshot-updated.event';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import type { HealthSnapshot } from '@modules/broker-health/models/health-snapshot.model';
-import type { ConfigService } from '@core/config/config.service';
 import type { FeatureFlagsService } from '@core/feature-flags/feature-flag.service';
+import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import {
   LiveOrderSafetyGateService,
   LIVE_TRADING_ENABLED_FLAG,
@@ -39,9 +39,9 @@ function build(
     liveTradingFlagEnabled?: boolean;
   } = {},
 ) {
-  const configService = {
-    tradingMode: options.tradingMode ?? 'LIVE',
-  } as unknown as ConfigService;
+  const tradingModeService = {
+    getCurrentMode: jest.fn().mockReturnValue(options.tradingMode ?? 'LIVE'),
+  } as unknown as jest.Mocked<TradingModeService>;
   const featureFlagsService = {
     isEnabled: jest
       .fn()
@@ -50,21 +50,22 @@ function build(
   const eventBus = new EventEmitterEventBus(new EventEmitter2());
 
   const gate = new LiveOrderSafetyGateService(
-    configService,
+    tradingModeService,
     featureFlagsService,
     eventBus,
   );
 
-  return { gate, eventBus, featureFlagsService };
+  return { gate, eventBus, featureFlagsService, tradingModeService };
 }
 
 describe('LiveOrderSafetyGateService', () => {
-  it('is a permanent no-op for PAPER mode — always allowed, regardless of everything else', async () => {
+  it("blocks — never silently allows — when the deployment's current mode is not LIVE, even for an already-armed live trade", async () => {
     const { gate } = build({ tradingMode: 'PAPER' });
 
-    const result = await gate.checkEntryAllowed(false);
+    const result = await gate.checkEntryAllowed(true);
 
-    expect(result).toEqual({ allowed: true, reason: null });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/not currently in live mode/i);
   });
 
   it('blocks a LIVE entry with no explicit confirmation', async () => {
@@ -137,6 +138,21 @@ describe('LiveOrderSafetyGateService', () => {
     const result = await gate.checkEntryAllowed(true);
 
     expect(result).toEqual({ allowed: true, reason: null });
+  });
+
+  it('switches from allowed to blocked mid-flight when the current mode changes away from LIVE — no caching of the earlier decision', async () => {
+    const { gate, eventBus, tradingModeService } = build({
+      tradingMode: 'LIVE',
+    });
+    eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
+
+    expect((await gate.checkEntryAllowed(true)).allowed).toBe(true);
+
+    tradingModeService.getCurrentMode.mockReturnValue('PAPER');
+
+    const result = await gate.checkEntryAllowed(true);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/not currently in live mode/i);
   });
 
   it('reflects the latest snapshot, not a stale earlier one', async () => {

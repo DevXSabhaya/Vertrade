@@ -1,6 +1,8 @@
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TargetHitEvent } from '@modules/trading-engine/events/target-hit.event';
 import { TargetManager } from './target-manager.service';
@@ -39,7 +41,14 @@ describe('TargetManager', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      },
+      } as unknown as PaperExecutor,
+      {
+        placeEntryOrder: jest.fn(),
+        modifyOrder: jest.fn(),
+        cancelOrder: jest.fn(),
+        exitPosition: jest.fn(),
+        getOrderStatus: jest.fn(),
+      } as unknown as AngelOneExecutor,
       clock,
     );
     extensionStore = new TradeExtensionStore(
@@ -66,6 +75,7 @@ describe('TargetManager', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [110, 120, 135],
+      mode: 'PAPER',
     });
   }
 

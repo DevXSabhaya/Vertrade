@@ -51,6 +51,11 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   private reconnectEventCount = 0;
   private watchdogHandle: unknown = null;
   private started = false;
+  // Keyed by instrumentToken — lets a client that subscribes after ticks have
+  // already started flowing receive an immediate snapshot instead of waiting
+  // indefinitely for the next one (RealtimeGateway.handleSubscribeInstrument
+  // is this getter's only external caller).
+  private readonly lastTickByInstrument = new Map<string, Tick>();
 
   constructor(
     @Inject(MARKET_DATA_PROVIDER)
@@ -126,6 +131,11 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** Last tick observed for this instrument, or null if none has arrived since this process started (or ever, for an instrument nobody has subscribed to yet). */
+  getLastTick(instrumentToken: string): Tick | null {
+    return this.lastTickByInstrument.get(instrumentToken) ?? null;
+  }
+
   getSubscriberCount(instrumentToken: string): number {
     if (!this.subscriptionManager.isSubscribed(instrumentToken)) {
       throw new UnknownInstrumentSubscriptionException(
@@ -155,6 +165,7 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   private handleTick(tick: Tick): void {
     this.lastTickReceivedAt = this.clock.now();
     this.lastTickTimestamp = tick.timestamp;
+    this.lastTickByInstrument.set(tick.instrumentToken, tick);
     this.eventBus.publish(
       new MarketPriceUpdatedEvent(tick.instrumentToken, tick.lastPrice),
     );

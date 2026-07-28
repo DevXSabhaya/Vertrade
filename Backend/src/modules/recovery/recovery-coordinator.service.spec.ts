@@ -8,6 +8,8 @@ import { TradingEngineService } from '@modules/trading-engine/trading-engine.ser
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { TradeSnapshot } from '@modules/trading-engine/domain/trade-snapshot';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import type { OrderQueueService } from '@modules/order-queue/order-queue.service';
 import type { PositionReconciliationService } from '@modules/position-reconciliation/position-reconciliation.service';
 import type { RiskPolicyService } from '@modules/risk-management/risk-policy.service';
@@ -50,6 +52,7 @@ function tradeSnapshot(overrides: Partial<TradeSnapshot> = {}): TradeSnapshot {
     initialStopLoss: 95,
     currentStopLoss: 95,
     targets: [110, 120],
+    mode: 'PAPER',
     remainingTargets: [110, 120],
     entryOrderId: 'E-1',
     entryOrderLifecycle: null,
@@ -197,7 +200,14 @@ describe('RecoveryCoordinator', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      },
+      } as unknown as PaperExecutor,
+      {
+        placeEntryOrder: jest.fn(),
+        modifyOrder: jest.fn(),
+        cancelOrder: jest.fn(),
+        exitPosition: jest.fn(),
+        getOrderStatus: jest.fn(),
+      } as unknown as AngelOneExecutor,
       clock,
     );
     orderQueueService = { getAllItems: jest.fn().mockReturnValue([]) };
@@ -317,6 +327,7 @@ describe('RecoveryCoordinator', () => {
         entryTriggerPrice: 100,
         initialStopLoss: 95,
         targets: [110, 120],
+        mode: 'PAPER',
       });
       const existingId = tradingEngineService.getAllTrades()[0].id;
       const snapshot = tradeSnapshot({

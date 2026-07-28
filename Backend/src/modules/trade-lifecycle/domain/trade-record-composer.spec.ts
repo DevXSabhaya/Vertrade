@@ -18,6 +18,7 @@ function snapshot(overrides: Partial<TradeSnapshot> = {}): TradeSnapshot {
     initialStopLoss: 95,
     currentStopLoss: 100,
     targets: [110, 120, 135, 150],
+    mode: 'PAPER',
     remainingTargets: [120, 135, 150],
     entryOrderId: 'E-1',
     entryOrderLifecycle: null,
@@ -46,7 +47,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date(1_700_000_000_000).toISOString()),
       110,
       1_700_000_010_000,
-      'PAPER',
     );
 
     expect(record.tradeId).toBe('t1');
@@ -67,7 +67,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.signalId).toBe('signal-42');
   });
@@ -78,7 +77,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.signalId).toBeNull();
   });
@@ -89,7 +87,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       110,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.unrealizedPnl).toBe(500);
   });
@@ -100,7 +97,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.unrealizedPnl).toBeNull();
   });
@@ -116,7 +112,6 @@ describe('composeTradeRecord', () => {
       extension,
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.brokerPositionId).toBe('POS-1');
     expect(record.trailingEnabled).toBe(true);
@@ -128,7 +123,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_005_000,
-      'PAPER',
     );
     expect(record.positionDurationMs).toBe(5000);
   });
@@ -139,7 +133,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.currentTarget).toBe(2);
   });
@@ -150,7 +143,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     expect(record.currentTarget).toBeNull();
   });
@@ -161,7 +153,6 @@ describe('composeTradeRecord', () => {
       defaultTradeExtension('t1', new Date().toISOString()),
       null,
       1_700_000_010_000,
-      'PAPER',
     );
     // risk = 100-95 = 5, reward = 110-100 = 10 -> 2
     expect(record.riskReward).toBe(2);

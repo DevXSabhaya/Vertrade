@@ -15,6 +15,16 @@ import { MissingExpiryException } from './exceptions/missing-expiry.exception';
 import { ExpiredContractException } from './exceptions/expired-contract.exception';
 import { AmbiguousInstrumentException } from './exceptions/ambiguous-instrument.exception';
 import { DuplicateInstrumentException } from './exceptions/duplicate-instrument.exception';
+import { ExpiryNotAvailableException } from './exceptions/expiry-not-available.exception';
+
+/** Same calendar date, ignoring time-of-day — the frontend only ever has a date to offer, never an exact millisecond expiry timestamp. */
+function isSameCalendarDate(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
 
 @Injectable()
 export class InstrumentResolverService {
@@ -23,9 +33,16 @@ export class InstrumentResolverService {
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
   ) {}
 
-  resolve(rawSymbol: string): ResolvedInstrument {
+  /**
+   * Resolves to exactly one contract, or throws. When the underlying/strike/
+   * optionType has more than one live expiry, `expiryFilter` is required to
+   * disambiguate — never silently picks the nearest/soonest one. Callers
+   * facing that ambiguity should call `resolveExpiries()` first to list the
+   * valid choices, then call this again with the user's selected expiry.
+   */
+  resolve(rawSymbol: string, expiryFilter?: Date): ResolvedInstrument {
     try {
-      const resolved = this.doResolve(rawSymbol);
+      const resolved = this.doResolve(rawSymbol, expiryFilter);
       this.eventBus.publish(
         new InstrumentResolvedEvent(rawSymbol, resolved.tradingSymbol),
       );
@@ -40,47 +57,46 @@ export class InstrumentResolverService {
     }
   }
 
-  private doResolve(rawSymbol: string): ResolvedInstrument {
+  /**
+   * Lists every currently-tradable contract matching the parsed underlying/
+   * strike/optionType, across every expiry — the multi-expiry counterpart to
+   * `resolve()`. Never throws on ambiguity (that's the whole point); still
+   * throws for a genuinely invalid strike/underlying/option-type, and still
+   * excludes expired or unrecognized-segment contracts, exactly like
+   * `resolve()` does for its single result. Sorted soonest-expiry first.
+   */
+  resolveExpiries(rawSymbol: string): ResolvedInstrument[] {
     const parsed = parseSymbolInput(rawSymbol);
+    const matches = this.findMatches(rawSymbol, parsed);
 
-    const candidates = this.instrumentMasterService
-      .getCache()
-      .findByUnderlying(parsed.underlying);
-    if (candidates.length === 0) {
-      throw new UnknownSymbolException(
-        `No instrument found for underlying "${parsed.underlying}"`,
+    return matches
+      .filter(
+        (instrument) =>
+          KNOWN_SEGMENTS.has(instrument.segment) &&
+          (!instrument.expiry || instrument.expiry.getTime() >= Date.now()),
+      )
+      .slice()
+      .sort((a, b) => (a.expiry?.getTime() ?? 0) - (b.expiry?.getTime() ?? 0))
+      .map((instrument) => this.toResolvedInstrument(instrument));
+  }
+
+  private doResolve(
+    rawSymbol: string,
+    expiryFilter?: Date,
+  ): ResolvedInstrument {
+    const parsed = parseSymbolInput(rawSymbol);
+    let matches = this.findMatches(rawSymbol, parsed);
+
+    if (expiryFilter) {
+      const atExpiry = matches.filter(
+        (i) => i.expiry && isSameCalendarDate(i.expiry, expiryFilter),
       );
-    }
-
-    let matches: readonly Instrument[];
-
-    if (parsed.optionType) {
-      if (parsed.strike === null || parsed.strike <= 0) {
-        throw new InvalidStrikeException(`Invalid strike for "${rawSymbol}"`);
-      }
-
-      const optionCandidates = candidates.filter(
-        (i) => i.optionType === parsed.optionType,
-      );
-      if (optionCandidates.length === 0) {
-        throw new UnknownSymbolException(
-          `No ${parsed.optionType} contracts found for "${parsed.underlying}"`,
+      if (atExpiry.length === 0) {
+        throw new ExpiryNotAvailableException(
+          `No contract for "${rawSymbol}" expiring on ${expiryFilter.toISOString().slice(0, 10)}`,
         );
       }
-
-      matches = optionCandidates.filter((i) => i.strike === parsed.strike);
-      if (matches.length === 0) {
-        throw new InvalidStrikeException(
-          `Strike ${parsed.strike} is not available for "${parsed.underlying} ${parsed.optionType}"`,
-        );
-      }
-    } else {
-      matches = candidates.filter((i) => i.optionType === null);
-      if (matches.length === 0) {
-        throw new UnknownSymbolException(
-          `No non-option instrument found for "${parsed.underlying}"`,
-        );
-      }
+      matches = atExpiry;
     }
 
     if (matches.length > 1) {
@@ -120,6 +136,58 @@ export class InstrumentResolverService {
       );
     }
 
+    return this.toResolvedInstrument(instrument);
+  }
+
+  /** Underlying/strike/optionType matching only — never filters by expiry; shared by `doResolve()` and `resolveExpiries()`. */
+  private findMatches(
+    rawSymbol: string,
+    parsed: ReturnType<typeof parseSymbolInput>,
+  ): Instrument[] {
+    const candidates = this.instrumentMasterService
+      .getCache()
+      .findByUnderlying(parsed.underlying);
+    if (candidates.length === 0) {
+      throw new UnknownSymbolException(
+        `No instrument found for underlying "${parsed.underlying}"`,
+      );
+    }
+
+    if (parsed.optionType) {
+      if (parsed.strike === null || parsed.strike <= 0) {
+        throw new InvalidStrikeException(`Invalid strike for "${rawSymbol}"`);
+      }
+
+      const optionCandidates = candidates.filter(
+        (i) => i.optionType === parsed.optionType,
+      );
+      if (optionCandidates.length === 0) {
+        throw new UnknownSymbolException(
+          `No ${parsed.optionType} contracts found for "${parsed.underlying}"`,
+        );
+      }
+
+      const matches = optionCandidates.filter(
+        (i) => i.strike === parsed.strike,
+      );
+      if (matches.length === 0) {
+        throw new InvalidStrikeException(
+          `Strike ${parsed.strike} is not available for "${parsed.underlying} ${parsed.optionType}"`,
+        );
+      }
+      return matches;
+    }
+
+    const matches = candidates.filter((i) => i.optionType === null);
+    if (matches.length === 0) {
+      throw new UnknownSymbolException(
+        `No non-option instrument found for "${parsed.underlying}"`,
+      );
+    }
+    return matches;
+  }
+
+  private toResolvedInstrument(instrument: Instrument): ResolvedInstrument {
     return new ResolvedInstrument(
       instrument.exchange,
       instrument.segment,
@@ -131,6 +199,7 @@ export class InstrumentResolverService {
       instrument.tickSize,
       instrument.lotSize,
       instrument.precision,
+      instrument.name,
     );
   }
 }

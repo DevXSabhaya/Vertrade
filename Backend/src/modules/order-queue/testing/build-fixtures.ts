@@ -34,5 +34,6 @@ export function buildResolvedInstrument(
     0.05,
     50,
     2,
+    'NIFTY',
   );
 }

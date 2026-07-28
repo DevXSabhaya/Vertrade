@@ -1,6 +1,8 @@
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
+import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
+import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
@@ -40,19 +42,21 @@ describe('TrailingManager', () => {
       },
     };
     const clock = new FakeClock();
+    const executor = {
+      placeEntryOrder: jest
+        .fn()
+        .mockResolvedValue(
+          new OrderResponse('E-1', OrderStatus.FILLED, 50, 100, new Date()),
+        ),
+      modifyOrder: jest.fn(),
+      cancelOrder: jest.fn(),
+      exitPosition: jest.fn(),
+      getOrderStatus: jest.fn(),
+    };
     tradingEngineService = new TradingEngineService(
       eventBus,
-      {
-        placeEntryOrder: jest
-          .fn()
-          .mockResolvedValue(
-            new OrderResponse('E-1', OrderStatus.FILLED, 50, 100, new Date()),
-          ),
-        modifyOrder: jest.fn(),
-        cancelOrder: jest.fn(),
-        exitPosition: jest.fn(),
-        getOrderStatus: jest.fn(),
-      },
+      executor as unknown as PaperExecutor,
+      executor as unknown as AngelOneExecutor,
       clock,
     );
     extensionRepository = new FakeTradeExtensionRepository();
@@ -75,6 +79,7 @@ describe('TrailingManager', () => {
       entryTriggerPrice: 100,
       initialStopLoss: 95,
       targets: [500], // far away, so the engine's own default trailing never interferes with these tests
+      mode: 'PAPER',
       ...overrides,
     });
     await tradingEngineService.handleMarketPriceUpdate(

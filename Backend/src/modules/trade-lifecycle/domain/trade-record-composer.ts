@@ -1,7 +1,7 @@
 import type { TradeSnapshot } from '@modules/trading-engine/domain/trade-snapshot';
 import { calculateUnrealizedPnl } from '@modules/trading-engine/domain/pnl.util';
 import type { TradeExtension } from '../models/trade-extension.model';
-import type { TradeRecord, TradingMode } from '../models/trade-record.model';
+import type { TradeRecord } from '../models/trade-record.model';
 import { deriveTradeLifecycleStage } from './trade-lifecycle-mapper';
 import { calculateRiskReward } from './risk-reward.util';
 
@@ -10,13 +10,16 @@ import { calculateRiskReward } from './risk-reward.util';
  * persisted as-is. `markPrice` is the last known tick for the trade's
  * instrument (or null if none has been observed yet); `nowMs` drives
  * `positionDurationMs` off the injected clock rather than `Date.now()`.
+ * `mode` comes straight from `snapshot.mode` — the trade's own pinned
+ * execution mode (captured once at creation), never a separately-passed
+ * "current mode" value that could drift from what this specific trade
+ * actually used.
  */
 export function composeTradeRecord(
   snapshot: TradeSnapshot,
   extension: TradeExtension,
   markPrice: number | null,
   nowMs: number,
-  mode: TradingMode,
 ): TradeRecord {
   const targetsHit = snapshot.targets.length - snapshot.remainingTargets.length;
   const currentTarget = targetsHit > 0 ? targetsHit : null;
@@ -70,7 +73,7 @@ export function composeTradeRecord(
       0,
       nowMs - new Date(snapshot.createdAt).getTime(),
     ),
-    mode,
+    mode: snapshot.mode,
   };
 }
 

@@ -15,6 +15,15 @@ export function formatDateTime(iso: string): string {
   })
 }
 
+/** Time-only, seconds included — for a "last updated" indicator next to a live-updating value, where the date is redundant and the extra precision (vs formatDateTime's minute-level timeStyle) matters. */
+export function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
 export function formatPnlClass(value: number): string {
   if (value > 0) return 'text-gain-600'
   if (value < 0) return 'text-loss-600'

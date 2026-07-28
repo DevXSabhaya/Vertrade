@@ -16,5 +16,7 @@ export class ResolvedInstrument {
     public readonly tickSize: number,
     public readonly lotSize: number,
     public readonly precision: number,
+    /** The underlying/instrument name (e.g. "BANKNIFTY", "RELIANCE") — appended last (not inserted positionally) to minimize breakage across existing positional callers. */
+    public readonly underlying: string,
   ) {}
 }
