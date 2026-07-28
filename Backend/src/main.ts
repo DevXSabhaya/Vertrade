@@ -84,36 +84,62 @@ async function bootstrap(): Promise<void> {
     );
   }
 
+  // Deploy platforms (Render, etc.) detect the process as healthy only once
+  // it is actually accepting connections on $PORT — every extra await placed
+  // between `create()` resolving and `listen()` delays that signal and, on a
+  // memory-constrained instance, risks the process being killed before it
+  // ever opens the port. `port`/`host` are never hardcoded: `port` falls
+  // back to 3000 only when `PORT` is unset (see `env.validation.ts`), and
+  // `0.0.0.0` (not `localhost`) is required for the platform's health check
+  // to reach the process from outside its container.
+  const port = configService.port;
+  await app.listen(port, '0.0.0.0');
+  logger.log(`Backend listening on port ${port}`, 'Bootstrap');
+
+  // Everything below is deliberately fire-and-forget, started only after the
+  // server is already accepting traffic — never awaited by bootstrap. Errors
+  // are caught and logged rather than left as unhandled rejections, since
+  // nothing here may ever fail the process once boot has already succeeded.
   if (configService.instrumentMasterProvider === 'MOCK') {
-    // The mock provider is entirely in-memory (no network call), so eagerly
-    // populating the cache at boot is safe and doesn't risk startup ever
-    // blocking on/failing due to external connectivity — unlike the real
-    // Angel One provider, which intentionally stays on its cron-only refresh
-    // schedule (see InstrumentMasterService.onModuleInit). Without this, a
-    // fresh Paper-only deployment would have an empty instrument cache until
-    // the next 8am cron tick, and no trade could ever resolve.
-    await app.get(InstrumentMasterService).refresh();
-    logger.log(
-      'Instrument master cache populated from MockInstrumentMasterProvider',
-      'Bootstrap',
-    );
+    // The mock provider is entirely in-memory (no network call) and small
+    // (~10 equities + a handful of index option chains) — cheap either way —
+    // but is still deferred so it can never be the reason the HTTP port
+    // opens late. The real Angel One provider intentionally stays on its
+    // cron-only refresh schedule (see InstrumentMasterService.onModuleInit)
+    // and is never triggered here.
+    app
+      .get(InstrumentMasterService)
+      .refresh()
+      .then(() => {
+        logger.log(
+          'Instrument master cache populated from MockInstrumentMasterProvider',
+          'Bootstrap',
+        );
+      })
+      .catch((error: unknown) => {
+        logger.error(
+          `Instrument master warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          'Bootstrap',
+        );
+      });
   }
 
   if (configService.marketDataProvider === 'MOCK') {
-    // Same reasoning as the instrument master cache above: the mock provider
-    // makes no real network call, so starting it eagerly is safe and never
-    // risks blocking/failing boot on external connectivity — unlike the real
-    // Angel One provider, which stays on-demand (started by the Scheduler's
-    // Morning Startup routine, a later explicit opt-in). Without this, no
-    // subscribed instrument would ever tick and neither the WebSocket
-    // gateway's price channel nor SL/target evaluation would receive any
-    // price updates in a fresh Paper-only deployment.
-    await app.get(MarketDataService).start();
-    logger.log('Market data started (MockMarketDataProvider)', 'Bootstrap');
+    // Same reasoning as the instrument master warm-up above: deferred so it
+    // can never delay the HTTP port opening, not because it is expensive.
+    app
+      .get(MarketDataService)
+      .start()
+      .then(() => {
+        logger.log('Market data started (MockMarketDataProvider)', 'Bootstrap');
+      })
+      .catch((error: unknown) => {
+        logger.error(
+          `Market data warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          'Bootstrap',
+        );
+      });
   }
-
-  await app.listen(configService.port);
-  logger.log(`Backend listening on port ${configService.port}`, 'Bootstrap');
 }
 
 bootstrap().catch((error: unknown) => {
