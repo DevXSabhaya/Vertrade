@@ -45,12 +45,15 @@ describe('SmtpEmailProvider', () => {
   beforeEach(() => {
     sendMailMock.mockReset();
     verifyMock.mockReset();
-    verifyMock.mockResolvedValue(true);
     createTransportMock.mockClear();
   });
 
-  it('sends successfully via the configured transport', async () => {
-    sendMailMock.mockResolvedValue(undefined);
+  it('sends successfully via the configured transport, without ever calling verify()', async () => {
+    sendMailMock.mockResolvedValue({
+      messageId: '<abc@example.com>',
+      accepted: ['user@example.com'],
+      rejected: [],
+    });
     const provider = new SmtpEmailProvider(makeConfigService(), makeLogger());
 
     await provider.send({
@@ -70,10 +73,15 @@ describe('SmtpEmailProvider', () => {
         envelope: { from: 'noreply@example.com', to: ['user@example.com'] },
       }),
     );
+    expect(verifyMock).not.toHaveBeenCalled();
   });
 
   it('sets a From header equal to configured SMTP_FROM/SMTP_FROM_NAME and a matching envelope sender', async () => {
-    sendMailMock.mockResolvedValue(undefined);
+    sendMailMock.mockResolvedValue({
+      messageId: '<abc@example.com>',
+      accepted: ['recipient@example.com'],
+      rejected: [],
+    });
     const provider = new SmtpEmailProvider(
       makeConfigService({
         smtpFrom: 'password-reset@example.com',
@@ -118,9 +126,57 @@ describe('SmtpEmailProvider', () => {
     );
   });
 
-  it('rejects and logs without leaking the password on authentication failure', async () => {
+  it('constructs the transport with 30s connection/greeting/socket timeouts and pool enabled', () => {
+    new SmtpEmailProvider(makeConfigService(), makeLogger());
+
+    expect(createTransportMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionTimeout: 30_000,
+        greetingTimeout: 30_000,
+        socketTimeout: 30_000,
+        pool: true,
+      }),
+    );
+  });
+
+  it('logs before sendMail() and after a successful sendMail(), including messageId/accepted/rejected', async () => {
+    sendMailMock.mockResolvedValue({
+      messageId: '<abc123@example.com>',
+      accepted: ['user@example.com'],
+      rejected: [],
+    });
+    const logger = makeLogger();
+    const provider = new SmtpEmailProvider(makeConfigService(), logger);
+
+    await provider.send({ to: 'user@example.com', subject: 's', text: 't' });
+
+    const events = logger.log.mock.calls.map(
+      ([message]: [string, string?]) =>
+        (JSON.parse(message) as { event: string }).event,
+    );
+    expect(events).toEqual([
+      'smtp_email_provider_configured',
+      'smtp_send_mail_started',
+      'smtp_send_mail_succeeded',
+    ]);
+
+    const [, startedMessage, succeededMessage] = logger.log.mock.calls.map(
+      ([message]: [string, string?]) => message,
+    );
+    const started = JSON.parse(startedMessage) as Record<string, unknown>;
+    expect(started.maskedRecipient).toBe('u***@example.com');
+
+    const succeeded = JSON.parse(succeededMessage) as Record<string, unknown>;
+    expect(succeeded.messageId).toBe('<abc123@example.com>');
+    expect(succeeded.accepted).toEqual(['user@example.com']);
+    expect(succeeded.rejected).toEqual([]);
+    expect(succeeded.durationMs).toEqual(expect.any(Number));
+  });
+
+  it('rejects and logs the complete error (code/responseCode/response/command/stack) without leaking the password on authentication failure', async () => {
     const authError = Object.assign(new Error('Invalid login: 535'), {
       code: 'EAUTH',
+      responseCode: 535,
     });
     sendMailMock.mockRejectedValue(authError);
     const logger = makeLogger();
@@ -130,14 +186,21 @@ describe('SmtpEmailProvider', () => {
       provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
     ).rejects.toThrow(/Failed to send email/);
 
-    const [loggedMessage] = logger.error.mock.calls[0] as [string];
+    const [loggedMessage, loggedStack] = logger.error.mock.calls[0] as [
+      string,
+      string | undefined,
+    ];
     const logged = JSON.parse(loggedMessage) as Record<string, unknown>;
+    expect(logged.event).toBe('smtp_email_send_failed');
     expect(logged.errorCode).toBe('EAUTH');
+    expect(logged.responseCode).toBe(535);
     expect(logged.provider).toBe('SMTP');
     expect(logged.smtpHost).toBe('smtp.example.com');
     expect(logged.smtpPort).toBe(587);
     expect(logged.secure).toBe(false);
     expect(logged.maskedRecipient).toBe('u***@example.com');
+    expect(logged.errorStack).toBe(authError.stack);
+    expect(loggedStack).toBe(authError.stack);
     expect(loggedMessage).not.toContain('password');
   });
 
@@ -170,126 +233,21 @@ describe('SmtpEmailProvider', () => {
     expect(logged.smtpResponse).toContain('invalid sender');
   });
 
-  it('rejects on connection failure', async () => {
-    const connError = Object.assign(new Error('Connection timeout'), {
-      code: 'ECONNECTION',
+  it('rejects and logs ETIMEDOUT on a connection timeout, without ever calling verify() first', async () => {
+    const timeoutError = Object.assign(new Error('Connection timeout'), {
+      code: 'ETIMEDOUT',
     });
-    sendMailMock.mockRejectedValue(connError);
-    const provider = new SmtpEmailProvider(makeConfigService(), makeLogger());
-
-    await expect(
-      provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
-    ).rejects.toThrow(/Failed to send email/);
-  });
-
-  it('verifies the SMTP connection before sending', async () => {
-    sendMailMock.mockResolvedValue(undefined);
-    const provider = new SmtpEmailProvider(makeConfigService(), makeLogger());
-
-    await provider.send({ to: 'user@example.com', subject: 's', text: 't' });
-
-    expect(verifyMock).toHaveBeenCalled();
-    expect(sendMailMock).toHaveBeenCalled();
-  });
-
-  it('rejects and logs without leaking the password when connection verification fails', async () => {
-    const verifyError = Object.assign(new Error('Invalid login: 535'), {
-      code: 'EAUTH',
-      responseCode: 535,
-    });
-    verifyMock.mockRejectedValue(verifyError);
+    sendMailMock.mockRejectedValue(timeoutError);
     const logger = makeLogger();
     const provider = new SmtpEmailProvider(makeConfigService(), logger);
 
     await expect(
       provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
-    ).rejects.toThrow(/SMTP connection\/authentication failed/);
+    ).rejects.toThrow(/Failed to send email/);
 
-    expect(sendMailMock).not.toHaveBeenCalled();
+    expect(verifyMock).not.toHaveBeenCalled();
     const [loggedMessage] = logger.error.mock.calls[0] as [string];
     const logged = JSON.parse(loggedMessage) as Record<string, unknown>;
-    expect(logged.event).toBe('smtp_connection_verify_failed');
-    expect(logged.errorCode).toBe('EAUTH');
-    expect(logged.responseCode).toBe(535);
-    expect(loggedMessage).not.toContain('password');
-  });
-
-  describe('fail-fast timeout enforcement', () => {
-    it('constructs the transport with explicit connection/greeting/socket timeouts', () => {
-      new SmtpEmailProvider(makeConfigService(), makeLogger());
-
-      expect(createTransportMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          connectionTimeout: expect.any(Number),
-          greetingTimeout: expect.any(Number),
-          socketTimeout: expect.any(Number),
-        }),
-      );
-    });
-
-    it('rejects within ~10s (never hangs) when verify() never resolves', async () => {
-      jest.useFakeTimers();
-      verifyMock.mockReturnValue(new Promise(() => {})); // never settles
-      const logger = makeLogger();
-      const provider = new SmtpEmailProvider(makeConfigService(), logger);
-
-      const pending = provider.send({
-        to: 'user@example.com',
-        subject: 's',
-        text: 't',
-      });
-      const assertion = expect(pending).rejects.toThrow(
-        /SMTP connection\/authentication failed/,
-      );
-      await jest.advanceTimersByTimeAsync(10_000);
-      await assertion;
-
-      expect(sendMailMock).not.toHaveBeenCalled();
-      jest.useRealTimers();
-    });
-
-    it('rejects within ~10s (never hangs) when sendMail() never resolves', async () => {
-      jest.useFakeTimers();
-      verifyMock.mockResolvedValue(true);
-      sendMailMock.mockReturnValue(new Promise(() => {})); // never settles
-      const logger = makeLogger();
-      const provider = new SmtpEmailProvider(makeConfigService(), logger);
-
-      const pending = provider.send({
-        to: 'user@example.com',
-        subject: 's',
-        text: 't',
-      });
-      const assertion = expect(pending).rejects.toThrow(/Failed to send email/);
-      await jest.advanceTimersByTimeAsync(10_000);
-      await assertion;
-
-      const [loggedMessage] = logger.error.mock.calls[0] as [string];
-      const logged = JSON.parse(loggedMessage) as Record<string, unknown>;
-      expect(logged.event).toBe('smtp_email_send_failed');
-      jest.useRealTimers();
-    });
-
-    it('logs verify/sendMail step timing before and after each async step', async () => {
-      sendMailMock.mockResolvedValue(undefined);
-      const logger = makeLogger();
-      const provider = new SmtpEmailProvider(makeConfigService(), logger);
-
-      await provider.send({ to: 'user@example.com', subject: 's', text: 't' });
-
-      const events = logger.log.mock.calls.map(
-        ([message]: [string, string?]) =>
-          (JSON.parse(message) as { event: string }).event,
-      );
-      expect(events).toEqual(
-        expect.arrayContaining([
-          'smtp_connection_verify_started',
-          'smtp_connection_verify_succeeded',
-          'smtp_send_mail_started',
-          'smtp_send_mail_succeeded',
-          'smtp_email_send_succeeded',
-        ]),
-      );
-    });
+    expect(logged.errorCode).toBe('ETIMEDOUT');
   });
 });
