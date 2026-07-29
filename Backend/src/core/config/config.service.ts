@@ -165,4 +165,16 @@ export class ConfigService {
   get smtpFromName(): string {
     return this.nestConfigService.get('SMTP_FROM_NAME', { infer: true });
   }
+
+  get resendApiKey(): string {
+    return this.nestConfigService.get('RESEND_API_KEY', { infer: true });
+  }
+
+  get emailFrom(): string {
+    return this.nestConfigService.get('EMAIL_FROM', { infer: true });
+  }
+
+  get emailFromName(): string {
+    return this.nestConfigService.get('EMAIL_FROM_NAME', { infer: true });
+  }
 }

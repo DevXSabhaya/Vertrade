@@ -26,6 +26,19 @@ function smtpConfig(
   });
 }
 
+/** A minimal, valid RESEND config. */
+function resendConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return baseConfig({
+    EMAIL_PROVIDER: 'RESEND',
+    RESEND_API_KEY: 're_live_1234567890abcdef',
+    EMAIL_FROM: 'noreply@example.com',
+    EMAIL_FROM_NAME: 'Trading App',
+    ...overrides,
+  });
+}
+
 describe('validateEnv', () => {
   it('boots successfully in PAPER mode with no Angel One credentials set', () => {
     const env = validateEnv(baseConfig({ TRADING_MODE: 'PAPER' }));
@@ -214,6 +227,59 @@ describe('validateEnv', () => {
   it('defaults SMTP_VERIFIED_SENDER to false', () => {
     const env = validateEnv(smtpConfig());
     expect(env.SMTP_VERIFIED_SENDER).toBe(false);
+  });
+
+  describe('EMAIL_PROVIDER=RESEND', () => {
+    it('fails to boot with EMAIL_PROVIDER=RESEND and missing RESEND_API_KEY/EMAIL_FROM/EMAIL_FROM_NAME', () => {
+      expect(() =>
+        validateEnv(baseConfig({ EMAIL_PROVIDER: 'RESEND' })),
+      ).toThrow(/RESEND_API_KEY is required when EMAIL_PROVIDER=RESEND/);
+    });
+
+    it('boots with EMAIL_PROVIDER=RESEND when all Resend config is present', () => {
+      const env = validateEnv(resendConfig());
+      expect(env.EMAIL_PROVIDER).toBe('RESEND');
+      expect(env.RESEND_API_KEY).toBe('re_live_1234567890abcdef');
+      expect(env.EMAIL_FROM).toBe('noreply@example.com');
+      expect(env.EMAIL_FROM_NAME).toBe('Trading App');
+    });
+
+    it('never requires SMTP config when EMAIL_PROVIDER=RESEND', () => {
+      const env = validateEnv(resendConfig());
+      expect(env.SMTP_HOST).toBe('');
+    });
+
+    it('rejects an invalid EMAIL_FROM address', () => {
+      expect(() =>
+        validateEnv(resendConfig({ EMAIL_FROM: 'not-an-email' })),
+      ).toThrow(/EMAIL_FROM is required when EMAIL_PROVIDER=RESEND/);
+    });
+
+    it('rejects a missing EMAIL_FROM_NAME', () => {
+      expect(() =>
+        validateEnv(resendConfig({ EMAIL_FROM_NAME: undefined })),
+      ).toThrow(/EMAIL_FROM_NAME is required when EMAIL_PROVIDER=RESEND/);
+    });
+
+    it('rejects a placeholder-looking RESEND_API_KEY in production', () => {
+      expect(() =>
+        validateEnv(
+          resendConfig({
+            NODE_ENV: 'production',
+            RESEND_API_KEY: 're_xxxxxxxxxxxxxxxxx',
+            FRONTEND_URL: 'https://app.example.com',
+            JWT_SECRET: 'a'.repeat(32),
+            TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+          }),
+        ),
+      ).toThrow(/RESEND_API_KEY looks like a placeholder value/);
+    });
+
+    it('rejects EMAIL_PROVIDER=RESEND combined with an invalid literal', () => {
+      expect(() =>
+        validateEnv(baseConfig({ EMAIL_PROVIDER: 'INVALID' })),
+      ).toThrow(/EMAIL_PROVIDER must be one of DEVELOPMENT, SMTP, or RESEND/);
+    });
   });
 
   describe('Phase 20 hardening — secret strength/placeholder rejection in production', () => {

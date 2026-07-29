@@ -21,7 +21,7 @@ export interface EnvironmentVariables {
   JWT_EXPIRES_IN: string;
   PAPER_TRADING_INITIAL_BALANCE: number;
   FRONTEND_URL: string;
-  EMAIL_PROVIDER: 'DEVELOPMENT' | 'SMTP';
+  EMAIL_PROVIDER: 'DEVELOPMENT' | 'SMTP' | 'RESEND';
   SMTP_HOST: string;
   SMTP_PORT: number;
   SMTP_SECURE: boolean;
@@ -30,6 +30,9 @@ export interface EnvironmentVariables {
   SMTP_FROM: string;
   SMTP_FROM_NAME: string;
   SMTP_VERIFIED_SENDER: boolean;
+  RESEND_API_KEY: string;
+  EMAIL_FROM: string;
+  EMAIL_FROM_NAME: string;
 }
 
 // Always required, regardless of trading mode — the app has no safe default
@@ -235,8 +238,12 @@ export function validateEnv(
     emailProviderRaw === undefined || emailProviderRaw === ''
       ? 'DEVELOPMENT'
       : emailProviderRaw;
-  if (emailProvider !== 'DEVELOPMENT' && emailProvider !== 'SMTP') {
-    errors.push('EMAIL_PROVIDER must be either DEVELOPMENT or SMTP');
+  if (
+    emailProvider !== 'DEVELOPMENT' &&
+    emailProvider !== 'SMTP' &&
+    emailProvider !== 'RESEND'
+  ) {
+    errors.push('EMAIL_PROVIDER must be one of DEVELOPMENT, SMTP, or RESEND');
   }
   // SMTP_VERIFIED_SENDER=true opts out of the SMTP_FROM===SMTP_USER
   // requirement below, for providers that support sending "as" a separately
@@ -347,6 +354,48 @@ export function validateEnv(
     if (smtpPort === 587 && smtpSecureRaw === 'true') {
       errors.push(
         'SMTP_SECURE=true is invalid with SMTP_PORT=587 (STARTTLS requires secure=false)',
+      );
+    }
+  }
+
+  // RESEND_API_KEY/EMAIL_FROM/EMAIL_FROM_NAME are deliberately their own
+  // fields, not SMTP_*: EMAIL_PROVIDER=RESEND never touches SMTP config, and
+  // a deployment can have both sets configured at once (e.g. to keep SMTP
+  // credentials on file for an easy rollback) without ambiguity about which
+  // is currently in use — only EMAIL_PROVIDER decides that.
+  if (emailProvider === 'RESEND') {
+    const resendApiKeyRaw = config.RESEND_API_KEY;
+    if (typeof resendApiKeyRaw !== 'string' || resendApiKeyRaw.trim() === '') {
+      errors.push(
+        'RESEND_API_KEY is required when EMAIL_PROVIDER=RESEND and must be a non-empty string',
+      );
+    } else if (
+      nodeEnv === 'production' &&
+      looksLikePlaceholder(resendApiKeyRaw)
+    ) {
+      errors.push(
+        'RESEND_API_KEY looks like a placeholder value and must be replaced with a real Resend API key in production',
+      );
+    }
+
+    const emailFromRaw = config.EMAIL_FROM;
+    if (
+      typeof emailFromRaw !== 'string' ||
+      emailFromRaw.trim() === '' ||
+      !EMAIL_PATTERN.test(emailFromRaw.trim())
+    ) {
+      errors.push(
+        'EMAIL_FROM is required when EMAIL_PROVIDER=RESEND and must be a valid email address',
+      );
+    }
+
+    const emailFromNameRaw = config.EMAIL_FROM_NAME;
+    if (
+      typeof emailFromNameRaw !== 'string' ||
+      emailFromNameRaw.trim() === ''
+    ) {
+      errors.push(
+        'EMAIL_FROM_NAME is required when EMAIL_PROVIDER=RESEND and must be a non-empty string',
       );
     }
   }
@@ -493,5 +542,8 @@ export function validateEnv(
     SMTP_FROM: effectiveSmtpFrom || ((config.SMTP_FROM as string) ?? ''),
     SMTP_FROM_NAME: smtpFromName,
     SMTP_VERIFIED_SENDER: smtpVerifiedSender,
+    RESEND_API_KEY: (config.RESEND_API_KEY as string) ?? '',
+    EMAIL_FROM: (config.EMAIL_FROM as string) ?? '',
+    EMAIL_FROM_NAME: (config.EMAIL_FROM_NAME as string) ?? '',
   };
 }
