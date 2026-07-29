@@ -4,6 +4,7 @@ import type { LoggerService } from '@core/logger/logger.service';
 
 const sendMock = jest.fn();
 const setCredentialsMock = jest.fn();
+const getAccessTokenMock = jest.fn();
 const gmailFactoryMock = jest.fn();
 gmailFactoryMock.mockReturnValue({
   users: { messages: { send: sendMock } },
@@ -13,6 +14,7 @@ jest.mock('google-auth-library', () => ({
   __esModule: true,
   OAuth2Client: jest.fn().mockImplementation(() => ({
     setCredentials: setCredentialsMock,
+    getAccessToken: getAccessTokenMock,
   })),
 }));
 
@@ -49,6 +51,8 @@ describe('GoogleMailProvider', () => {
   beforeEach(() => {
     sendMock.mockReset();
     setCredentialsMock.mockReset();
+    getAccessTokenMock.mockReset();
+    getAccessTokenMock.mockResolvedValue({ token: 'fake-access-token' });
     gmailFactoryMock.mockClear();
   });
 
@@ -90,17 +94,28 @@ describe('GoogleMailProvider', () => {
 
     await provider.send({ to: 'user@example.com', subject: 's', text: 't' });
 
-    const events = logger.log.mock.calls.map(
-      ([message]: [string, string?]) =>
-        (JSON.parse(message) as { event: string }).event,
-    );
-    expect(events).toEqual([
+    const jsonEvents = logger.log.mock.calls
+      .map(([message]: [string, string?]) => {
+        try {
+          return (JSON.parse(message) as { event?: string }).event;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((event): event is string => event !== undefined);
+    expect(jsonEvents).toEqual([
       'google_mail_provider_configured',
       'email_send_started',
+      'access_token_refresh_started',
+      'access_token_refresh_succeeded',
+      'gmail_api_request_started',
+      'gmail_api_response_received',
       'email_send_success',
     ]);
 
-    const successMessage = logger.log.mock.calls[2]?.[0];
+    const successMessage = logger.log.mock.calls.find(
+      ([message]: [string, string?]) => message.includes('email_send_success'),
+    )?.[0] as string;
     const success = JSON.parse(successMessage) as Record<string, unknown>;
     expect(success.messageId).toBe('msg_abc');
     expect(success.attempt).toBe(1);
@@ -218,6 +233,87 @@ describe('GoogleMailProvider', () => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
 
+    it('logs the complete Gmail API error body — status, message, code, errors[], stack', async () => {
+      const apiError = Object.assign(
+        new Error('Request had insufficient authentication scopes.'),
+        {
+          response: {
+            status: 403,
+            data: {
+              error: {
+                code: 403,
+                message: 'Request had insufficient authentication scopes.',
+                status: 'PERMISSION_DENIED',
+                errors: [
+                  {
+                    message: 'Insufficient Permission',
+                    domain: 'global',
+                    reason: 'insufficientPermissions',
+                  },
+                ],
+              },
+            },
+          },
+        },
+      );
+      sendMock.mockRejectedValue(apiError);
+      const logger = makeLogger();
+      const provider = new GoogleMailProvider(makeConfigService(), logger);
+
+      await expect(
+        provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
+      ).rejects.toThrow(/Failed to send email/);
+
+      const [finalMessage] = logger.error.mock.calls.at(-1) as [string];
+      const logged = JSON.parse(finalMessage) as Record<string, unknown>;
+      expect(logged.event).toBe('email_send_failed');
+      expect(logged.status).toBe(403);
+      expect(logged.apiStatus).toBe('PERMISSION_DENIED');
+      expect(logged.code).toBe(403);
+      expect(logged.errors).toEqual([
+        {
+          message: 'Insufficient Permission',
+          domain: 'global',
+          reason: 'insufficientPermissions',
+        },
+      ]);
+      expect(logged.stack).toEqual(expect.any(String));
+    });
+
+    it('logs a distinct access_token_refresh_started/failed step and throws when the refresh token is invalid — never attempts the Gmail API call', async () => {
+      const refreshError = Object.assign(new Error('invalid_grant'), {
+        response: { status: 400, data: { error: 'invalid_grant' } },
+      });
+      getAccessTokenMock.mockRejectedValue(refreshError);
+      const logger = makeLogger();
+      const provider = new GoogleMailProvider(makeConfigService(), logger);
+
+      await expect(
+        provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
+      ).rejects.toThrow(/Failed to send email: invalid_grant/);
+
+      expect(sendMock).not.toHaveBeenCalled();
+      const events = logger.error.mock.calls.map(
+        ([message]: [string, string?, string?]) =>
+          (JSON.parse(message) as { event: string }).event,
+      );
+      expect(events).toContain('email_send_attempt_failed');
+    });
+
+    it('throws (never returns success) when getAccessToken() resolves with no token', async () => {
+      getAccessTokenMock.mockResolvedValue({ token: null });
+      const provider = new GoogleMailProvider(
+        makeConfigService(),
+        makeLogger(),
+      );
+
+      await expect(
+        provider.send({ to: 'user@example.com', subject: 's', text: 't' }),
+      ).rejects.toThrow(/Failed to send email/);
+
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
     it('logs email_send_failed with the full error after all attempts are exhausted', async () => {
       jest.useFakeTimers();
       const transientError = Object.assign(new Error('Internal error'), {
@@ -241,7 +337,8 @@ describe('GoogleMailProvider', () => {
       const logged = JSON.parse(finalMessage) as Record<string, unknown>;
       expect(logged.event).toBe('email_send_failed');
       expect(logged.provider).toBe('GOOGLE');
-      expect(logged.errorMessage).toBe('Internal error');
+      expect(logged.message).toBe('Internal error');
+      expect(logged.status).toBe(500);
       jest.useRealTimers();
     });
   });
