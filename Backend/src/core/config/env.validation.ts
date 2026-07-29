@@ -233,11 +233,18 @@ export function validateEnv(
     }
   }
 
+  // Trimmed defensively — a value pasted into a dashboard env var editor
+  // (Render, etc.) commonly picks up a trailing space or newline, which
+  // would otherwise silently fail the strict equality checks below despite
+  // looking correct at a glance.
   const emailProviderRaw = config.EMAIL_PROVIDER;
   const emailProvider =
-    emailProviderRaw === undefined || emailProviderRaw === ''
+    emailProviderRaw === undefined ||
+    (typeof emailProviderRaw === 'string' && emailProviderRaw.trim() === '')
       ? 'DEVELOPMENT'
-      : emailProviderRaw;
+      : typeof emailProviderRaw === 'string'
+        ? emailProviderRaw.trim()
+        : emailProviderRaw;
   if (
     emailProvider !== 'DEVELOPMENT' &&
     emailProvider !== 'SMTP' &&
