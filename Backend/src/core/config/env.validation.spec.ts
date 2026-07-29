@@ -11,30 +11,18 @@ function baseConfig(
   };
 }
 
-/** A minimal, internally-consistent SMTP config: SMTP_FROM equals SMTP_USER (the default-allowed case), SMTP_FROM_NAME set. */
-function smtpConfig(
+/** A minimal, valid Gmail API (OAuth2) config. */
+function googleConfig(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return baseConfig({
-    EMAIL_PROVIDER: 'SMTP',
-    SMTP_HOST: 'smtp.example.com',
-    SMTP_USER: 'user@example.com',
-    SMTP_PASS: 'pass',
-    SMTP_FROM: 'user@example.com',
-    SMTP_FROM_NAME: 'Trading App',
-    ...overrides,
-  });
-}
-
-/** A minimal, valid RESEND config. */
-function resendConfig(
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return baseConfig({
-    EMAIL_PROVIDER: 'RESEND',
-    RESEND_API_KEY: 're_live_1234567890abcdef',
-    EMAIL_FROM: 'noreply@example.com',
-    EMAIL_FROM_NAME: 'Trading App',
+    EMAIL_PROVIDER: 'GOOGLE',
+    GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'client-secret-value',
+    GOOGLE_REFRESH_TOKEN: 'refresh-token-value',
+    GOOGLE_REDIRECT_URI: 'https://developers.google.com/oauthplayground',
+    EMAIL_FROM: 'vertrade19@gmail.com',
+    EMAIL_FROM_NAME: 'Vertrade',
     ...overrides,
   });
 }
@@ -114,171 +102,135 @@ describe('validateEnv', () => {
     expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('MOCK');
   });
 
-  it('defaults EMAIL_PROVIDER to DEVELOPMENT and requires no SMTP config', () => {
+  it('defaults EMAIL_PROVIDER to DEVELOPMENT and requires no Google credentials outside production', () => {
     const env = validateEnv(baseConfig());
     expect(env.EMAIL_PROVIDER).toBe('DEVELOPMENT');
   });
 
-  it('fails to boot with EMAIL_PROVIDER=SMTP and missing SMTP config', () => {
+  it('rejects an invalid EMAIL_PROVIDER literal', () => {
     expect(() => validateEnv(baseConfig({ EMAIL_PROVIDER: 'SMTP' }))).toThrow(
-      /SMTP_HOST is required when EMAIL_PROVIDER=SMTP/,
+      /EMAIL_PROVIDER must be either DEVELOPMENT or GOOGLE/,
     );
   });
 
-  it('boots with EMAIL_PROVIDER=SMTP when all SMTP config is present', () => {
-    const env = validateEnv(smtpConfig());
-    expect(env.EMAIL_PROVIDER).toBe('SMTP');
-    expect(env.SMTP_PORT).toBe(587);
-    expect(env.SMTP_SECURE).toBe(false);
-    expect(env.SMTP_FROM).toBe('user@example.com');
-  });
-
-  it('defaults SMTP_SECURE to true for port 465 and false otherwise', () => {
-    const secure465 = validateEnv(smtpConfig({ SMTP_PORT: '465' }));
-    expect(secure465.SMTP_SECURE).toBe(true);
-  });
-
-  it('rejects SMTP_PORT=465 with SMTP_SECURE=false', () => {
-    expect(() =>
-      validateEnv(smtpConfig({ SMTP_PORT: '465', SMTP_SECURE: 'false' })),
-    ).toThrow(/SMTP_SECURE=false is invalid with SMTP_PORT=465/);
-  });
-
-  it('rejects SMTP_PORT=587 with SMTP_SECURE=true', () => {
-    expect(() =>
-      validateEnv(smtpConfig({ SMTP_PORT: '587', SMTP_SECURE: 'true' })),
-    ).toThrow(/SMTP_SECURE=true is invalid with SMTP_PORT=587/);
-  });
-
-  it('rejects a non-boolean SMTP_SECURE value', () => {
-    expect(() => validateEnv(baseConfig({ SMTP_SECURE: 'yes' }))).toThrow(
-      /SMTP_SECURE must be either "true" or "false"/,
-    );
-  });
-
-  it('fails to boot with EMAIL_PROVIDER=SMTP and no SMTP_FROM_NAME', () => {
-    expect(() =>
-      validateEnv(smtpConfig({ SMTP_FROM_NAME: undefined })),
-    ).toThrow(/SMTP_FROM_NAME is required when EMAIL_PROVIDER=SMTP/);
-  });
-
-  it('rejects an invalid SMTP_FROM email address', () => {
-    expect(() =>
-      validateEnv(smtpConfig({ SMTP_FROM: 'not-an-email' })),
-    ).toThrow(/SMTP_FROM must be a valid email address/);
-  });
-
-  it('rejects an invalid SMTP_USER email address', () => {
-    expect(() =>
-      validateEnv(
-        smtpConfig({ SMTP_USER: 'not-an-email', SMTP_FROM: 'not-an-email' }),
-      ),
-    ).toThrow(/SMTP_USER must be a valid email address/);
-  });
-
-  it('boots with EMAIL_PROVIDER=SMTP when SMTP_FROM and SMTP_FROM_NAME are both valid', () => {
-    const env = validateEnv(smtpConfig());
-    expect(env.SMTP_FROM).toBe('user@example.com');
-    expect(env.SMTP_FROM_NAME).toBe('Trading App');
-  });
-
-  it('falls back to SMTP_USER as SMTP_FROM when SMTP_FROM is not set', () => {
-    const env = validateEnv(
-      smtpConfig({ SMTP_USER: 'user@example.com', SMTP_FROM: undefined }),
-    );
-    expect(env.SMTP_FROM).toBe('user@example.com');
-  });
-
-  it('fails to boot when SMTP_FROM is unset and SMTP_USER is not a valid email to fall back to', () => {
-    expect(() =>
-      validateEnv(
-        smtpConfig({ SMTP_USER: 'not-an-email', SMTP_FROM: undefined }),
-      ),
-    ).toThrow(
-      /SMTP_USER must be a valid email address to use as the SMTP_FROM fallback/,
-    );
-  });
-
-  it('rejects SMTP_FROM that differs from SMTP_USER when SMTP_VERIFIED_SENDER is not set', () => {
-    expect(() =>
-      validateEnv(
-        smtpConfig({
-          SMTP_USER: 'user@example.com',
-          SMTP_FROM: 'marketing@example.com',
-        }),
-      ),
-    ).toThrow(
-      /SMTP_FROM must equal SMTP_USER unless SMTP_VERIFIED_SENDER=true/,
-    );
-  });
-
-  it('allows SMTP_FROM to differ from SMTP_USER when SMTP_VERIFIED_SENDER=true', () => {
-    const env = validateEnv(
-      smtpConfig({
-        SMTP_USER: 'user@example.com',
-        SMTP_FROM: 'marketing@example.com',
-        SMTP_VERIFIED_SENDER: 'true',
-      }),
-    );
-    expect(env.SMTP_FROM).toBe('marketing@example.com');
-    expect(env.SMTP_VERIFIED_SENDER).toBe(true);
-  });
-
-  it('defaults SMTP_VERIFIED_SENDER to false', () => {
-    const env = validateEnv(smtpConfig());
-    expect(env.SMTP_VERIFIED_SENDER).toBe(false);
-  });
-
-  describe('EMAIL_PROVIDER=RESEND', () => {
-    it('fails to boot with EMAIL_PROVIDER=RESEND and missing RESEND_API_KEY/EMAIL_FROM/EMAIL_FROM_NAME', () => {
+  describe('EMAIL_PROVIDER=GOOGLE (Gmail API via OAuth2)', () => {
+    it('fails to boot with EMAIL_PROVIDER=GOOGLE and missing Google OAuth2 config', () => {
       expect(() =>
-        validateEnv(baseConfig({ EMAIL_PROVIDER: 'RESEND' })),
-      ).toThrow(/RESEND_API_KEY is required when EMAIL_PROVIDER=RESEND/);
+        validateEnv(baseConfig({ EMAIL_PROVIDER: 'GOOGLE' })),
+      ).toThrow(/GOOGLE_CLIENT_ID is required to send email via the Gmail API/);
     });
 
-    it('boots with EMAIL_PROVIDER=RESEND when all Resend config is present', () => {
-      const env = validateEnv(resendConfig());
-      expect(env.EMAIL_PROVIDER).toBe('RESEND');
-      expect(env.RESEND_API_KEY).toBe('re_live_1234567890abcdef');
-      expect(env.EMAIL_FROM).toBe('noreply@example.com');
-      expect(env.EMAIL_FROM_NAME).toBe('Trading App');
+    it('boots with EMAIL_PROVIDER=GOOGLE when all Google OAuth2 config is present', () => {
+      const env = validateEnv(googleConfig());
+      expect(env.EMAIL_PROVIDER).toBe('GOOGLE');
+      expect(env.GOOGLE_CLIENT_ID).toBe('client-id.apps.googleusercontent.com');
+      expect(env.GOOGLE_CLIENT_SECRET).toBe('client-secret-value');
+      expect(env.GOOGLE_REFRESH_TOKEN).toBe('refresh-token-value');
+      expect(env.GOOGLE_REDIRECT_URI).toBe(
+        'https://developers.google.com/oauthplayground',
+      );
+      expect(env.EMAIL_FROM).toBe('vertrade19@gmail.com');
+      expect(env.EMAIL_FROM_NAME).toBe('Vertrade');
     });
 
-    it('never requires SMTP config when EMAIL_PROVIDER=RESEND', () => {
-      const env = validateEnv(resendConfig());
-      expect(env.SMTP_HOST).toBe('');
+    it('rejects a missing GOOGLE_CLIENT_SECRET', () => {
+      expect(() =>
+        validateEnv(googleConfig({ GOOGLE_CLIENT_SECRET: undefined })),
+      ).toThrow(
+        /GOOGLE_CLIENT_SECRET is required to send email via the Gmail API/,
+      );
+    });
+
+    it('rejects a missing GOOGLE_REFRESH_TOKEN', () => {
+      expect(() =>
+        validateEnv(googleConfig({ GOOGLE_REFRESH_TOKEN: undefined })),
+      ).toThrow(
+        /GOOGLE_REFRESH_TOKEN is required to send email via the Gmail API/,
+      );
+    });
+
+    it('rejects a missing GOOGLE_REDIRECT_URI', () => {
+      expect(() =>
+        validateEnv(googleConfig({ GOOGLE_REDIRECT_URI: undefined })),
+      ).toThrow(
+        /GOOGLE_REDIRECT_URI is required to send email via the Gmail API/,
+      );
     });
 
     it('rejects an invalid EMAIL_FROM address', () => {
       expect(() =>
-        validateEnv(resendConfig({ EMAIL_FROM: 'not-an-email' })),
-      ).toThrow(/EMAIL_FROM is required when EMAIL_PROVIDER=RESEND/);
+        validateEnv(googleConfig({ EMAIL_FROM: 'not-an-email' })),
+      ).toThrow(/EMAIL_FROM is required to send email via the Gmail API/);
     });
 
     it('rejects a missing EMAIL_FROM_NAME', () => {
       expect(() =>
-        validateEnv(resendConfig({ EMAIL_FROM_NAME: undefined })),
-      ).toThrow(/EMAIL_FROM_NAME is required when EMAIL_PROVIDER=RESEND/);
+        validateEnv(googleConfig({ EMAIL_FROM_NAME: undefined })),
+      ).toThrow(/EMAIL_FROM_NAME is required to send email via the Gmail API/);
     });
 
-    it('rejects a placeholder-looking RESEND_API_KEY in production', () => {
+    it('rejects a placeholder-looking GOOGLE_CLIENT_SECRET in production', () => {
       expect(() =>
         validateEnv(
-          resendConfig({
+          googleConfig({
             NODE_ENV: 'production',
-            RESEND_API_KEY: 're_xxxxxxxxxxxxxxxxx',
+            GOOGLE_CLIENT_SECRET: 'your-client-secret-here',
             FRONTEND_URL: 'https://app.example.com',
             JWT_SECRET: 'a'.repeat(32),
             TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
           }),
         ),
-      ).toThrow(/RESEND_API_KEY looks like a placeholder value/);
+      ).toThrow(/GOOGLE_CLIENT_SECRET looks like a placeholder value/);
+    });
+  });
+
+  describe('production always sends via Gmail, regardless of EMAIL_PROVIDER', () => {
+    it('requires Google OAuth2 config in production even when EMAIL_PROVIDER is unset', () => {
+      expect(() =>
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            FRONTEND_URL: 'https://app.example.com',
+            JWT_SECRET: 'a'.repeat(32),
+            TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+          }),
+        ),
+      ).toThrow(/GOOGLE_CLIENT_ID is required to send email via the Gmail API/);
     });
 
-    it('rejects EMAIL_PROVIDER=RESEND combined with an invalid literal', () => {
+    it('requires Google OAuth2 config in production even when EMAIL_PROVIDER=DEVELOPMENT is explicitly set', () => {
+      // Regression guard: production must never be able to boot in a state
+      // where email silently doesn't send for real.
       expect(() =>
-        validateEnv(baseConfig({ EMAIL_PROVIDER: 'INVALID' })),
-      ).toThrow(/EMAIL_PROVIDER must be one of DEVELOPMENT, SMTP, or RESEND/);
+        validateEnv(
+          baseConfig({
+            NODE_ENV: 'production',
+            EMAIL_PROVIDER: 'DEVELOPMENT',
+            FRONTEND_URL: 'https://app.example.com',
+            JWT_SECRET: 'a'.repeat(32),
+            TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+          }),
+        ),
+      ).toThrow(/GOOGLE_CLIENT_ID is required to send email via the Gmail API/);
+    });
+
+    it('boots in production once Google OAuth2 config is present, regardless of EMAIL_PROVIDER', () => {
+      const env = validateEnv(
+        googleConfig({
+          NODE_ENV: 'production',
+          EMAIL_PROVIDER: undefined,
+          MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+          FRONTEND_URL: 'https://app.example.com',
+          JWT_SECRET: 'a'.repeat(32),
+          TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+        }),
+      );
+      expect(env.NODE_ENV).toBe('production');
+      expect(env.EMAIL_PROVIDER).toBe('DEVELOPMENT');
+    });
+
+    it('does not require Google OAuth2 config outside production when EMAIL_PROVIDER is unset', () => {
+      expect(() => validateEnv(baseConfig())).not.toThrow();
     });
   });
 
@@ -324,7 +276,7 @@ describe('validateEnv', () => {
 
     it('accepts a long, non-placeholder JWT_SECRET/TOKEN_ENCRYPTION_KEY in production', () => {
       const env = validateEnv(
-        baseConfig({
+        googleConfig({
           NODE_ENV: 'production',
           JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
           TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',

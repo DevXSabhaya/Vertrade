@@ -171,7 +171,7 @@ export class PasswordResetService {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Unknown error';
       // `IEmailProvider.send()` is required to reject within its own bounded
-      // deadline (see `SmtpEmailProvider`'s `SMTP_OVERALL_TIMEOUT_MS`), so
+      // deadline (see `GoogleMailProvider`'s `GMAIL_SEND_TIMEOUT_MS`), so
       // this catch is always reached quickly — `durationMs` here is what
       // confirms that in production logs rather than just in tests.
       this.logger.error(

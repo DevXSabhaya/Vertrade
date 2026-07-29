@@ -21,16 +21,11 @@ export interface EnvironmentVariables {
   JWT_EXPIRES_IN: string;
   PAPER_TRADING_INITIAL_BALANCE: number;
   FRONTEND_URL: string;
-  EMAIL_PROVIDER: 'DEVELOPMENT' | 'SMTP' | 'RESEND';
-  SMTP_HOST: string;
-  SMTP_PORT: number;
-  SMTP_SECURE: boolean;
-  SMTP_USER: string;
-  SMTP_PASS: string;
-  SMTP_FROM: string;
-  SMTP_FROM_NAME: string;
-  SMTP_VERIFIED_SENDER: boolean;
-  RESEND_API_KEY: string;
+  EMAIL_PROVIDER: 'DEVELOPMENT' | 'GOOGLE';
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_REFRESH_TOKEN: string;
+  GOOGLE_REDIRECT_URI: string;
   EMAIL_FROM: string;
   EMAIL_FROM_NAME: string;
 }
@@ -245,144 +240,39 @@ export function validateEnv(
       : typeof emailProviderRaw === 'string'
         ? emailProviderRaw.trim()
         : emailProviderRaw;
-  if (
-    emailProvider !== 'DEVELOPMENT' &&
-    emailProvider !== 'SMTP' &&
-    emailProvider !== 'RESEND'
-  ) {
-    errors.push('EMAIL_PROVIDER must be one of DEVELOPMENT, SMTP, or RESEND');
+  if (emailProvider !== 'DEVELOPMENT' && emailProvider !== 'GOOGLE') {
+    errors.push('EMAIL_PROVIDER must be either DEVELOPMENT or GOOGLE');
   }
-  // SMTP_VERIFIED_SENDER=true opts out of the SMTP_FROM===SMTP_USER
-  // requirement below, for providers that support sending "as" a separately
-  // verified sender identity distinct from the authenticated account.
-  const smtpVerifiedSenderRaw = config.SMTP_VERIFIED_SENDER;
-  const smtpVerifiedSender =
-    typeof smtpVerifiedSenderRaw === 'string' &&
-    smtpVerifiedSenderRaw.toLowerCase() === 'true';
 
-  let effectiveSmtpFrom = '';
-  if (emailProvider === 'SMTP') {
-    for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'] as const) {
+  // Gmail API via OAuth2 (`GoogleMailProvider`) is the only real,
+  // network-sending email provider in this codebase — SMTP and Resend have
+  // been fully removed. `DEVELOPMENT` (in-memory, no network call) must
+  // never be the *effective* provider once deployed for real users, so
+  // production requires these regardless of what EMAIL_PROVIDER is set to
+  // — see `selectEmailProvider`, which never selects DEVELOPMENT in
+  // production either. This closes the exact misconfiguration class that
+  // previously let a stale EMAIL_PROVIDER value silently keep the old
+  // provider active after credentials for a new one were added: production
+  // no longer depends on anyone remembering to flip a selector variable.
+  const googleRequiredForSending =
+    nodeEnv === 'production' || emailProvider === 'GOOGLE';
+  if (googleRequiredForSending) {
+    for (const key of [
+      'GOOGLE_CLIENT_ID',
+      'GOOGLE_CLIENT_SECRET',
+      'GOOGLE_REFRESH_TOKEN',
+      'GOOGLE_REDIRECT_URI',
+    ] as const) {
       const value = config[key];
       if (typeof value !== 'string' || value.trim() === '') {
         errors.push(
-          `${key} is required when EMAIL_PROVIDER=SMTP and must be a non-empty string`,
+          `${key} is required to send email via the Gmail API (production always sends real email) and must be a non-empty string`,
+        );
+      } else if (nodeEnv === 'production' && looksLikePlaceholder(value)) {
+        errors.push(
+          `${key} looks like a placeholder value and must be replaced with a real credential in production`,
         );
       }
-    }
-    const smtpUserRaw = config.SMTP_USER;
-    if (
-      typeof smtpUserRaw === 'string' &&
-      smtpUserRaw.trim() !== '' &&
-      !EMAIL_PATTERN.test(smtpUserRaw.trim())
-    ) {
-      errors.push('SMTP_USER must be a valid email address');
-    }
-
-    const smtpFromNameRawForCheck = config.SMTP_FROM_NAME;
-    if (
-      typeof smtpFromNameRawForCheck !== 'string' ||
-      smtpFromNameRawForCheck.trim() === ''
-    ) {
-      errors.push(
-        'SMTP_FROM_NAME is required when EMAIL_PROVIDER=SMTP and must be a non-empty string',
-      );
-    }
-
-    // SMTP_FROM becomes both the message From address and the envelope
-    // sender — a malformed value here is exactly what produces a "no valid
-    // From address found in header or envelope" rejection at the SMTP
-    // server's DATA stage, so this must fail fast at boot instead of
-    // surfacing as an opaque delivery failure per request. If SMTP_FROM is
-    // unset, we fall back to the (already-validated) SMTP_USER rather than
-    // requiring it be set twice — many relays require exactly this anyway.
-    const smtpFromRaw = config.SMTP_FROM;
-    const smtpFromProvided =
-      typeof smtpFromRaw === 'string' && smtpFromRaw.trim() !== '';
-    effectiveSmtpFrom = smtpFromProvided
-      ? smtpFromRaw.trim()
-      : typeof smtpUserRaw === 'string'
-        ? smtpUserRaw.trim()
-        : '';
-
-    if (effectiveSmtpFrom === '') {
-      errors.push(
-        'SMTP_FROM is required when EMAIL_PROVIDER=SMTP and SMTP_USER is not a usable fallback',
-      );
-    } else if (!EMAIL_PATTERN.test(effectiveSmtpFrom)) {
-      errors.push(
-        smtpFromProvided
-          ? 'SMTP_FROM must be a valid email address'
-          : 'SMTP_USER must be a valid email address to use as the SMTP_FROM fallback',
-      );
-    }
-
-    // Most transactional SMTP relays reject (or silently ignore) a From
-    // address that doesn't match the authenticated account unless that
-    // address has been separately verified as a sender identity — set
-    // SMTP_VERIFIED_SENDER=true to acknowledge that's been done out of band.
-    if (
-      !smtpVerifiedSender &&
-      typeof smtpUserRaw === 'string' &&
-      smtpFromProvided &&
-      effectiveSmtpFrom.toLowerCase() !== smtpUserRaw.trim().toLowerCase()
-    ) {
-      errors.push(
-        'SMTP_FROM must equal SMTP_USER unless SMTP_VERIFIED_SENDER=true (the SMTP account is not automatically allowed to send as an arbitrary From address)',
-      );
-    }
-  }
-  const smtpPortRaw = config.SMTP_PORT;
-  const smtpPort =
-    smtpPortRaw === undefined || smtpPortRaw === '' ? 587 : Number(smtpPortRaw);
-  if (!Number.isInteger(smtpPort) || smtpPort <= 0) {
-    errors.push('SMTP_PORT must be a positive integer');
-  }
-
-  // Port 465 is implicit TLS (secure=true); every other port (587, 25, ...)
-  // uses STARTTLS negotiated after connecting (secure=false). SMTP_SECURE
-  // lets an operator override that default explicitly rather than us
-  // silently guessing wrong for a non-standard port.
-  const smtpSecureRaw = config.SMTP_SECURE;
-  let smtpSecure = smtpPort === 465;
-  if (smtpSecureRaw !== undefined && smtpSecureRaw !== '') {
-    if (smtpSecureRaw !== 'true' && smtpSecureRaw !== 'false') {
-      errors.push('SMTP_SECURE must be either "true" or "false"');
-    } else {
-      smtpSecure = smtpSecureRaw === 'true';
-    }
-  }
-  if (emailProvider === 'SMTP') {
-    if (smtpPort === 465 && smtpSecureRaw === 'false') {
-      errors.push(
-        'SMTP_SECURE=false is invalid with SMTP_PORT=465 (implicit TLS requires secure=true)',
-      );
-    }
-    if (smtpPort === 587 && smtpSecureRaw === 'true') {
-      errors.push(
-        'SMTP_SECURE=true is invalid with SMTP_PORT=587 (STARTTLS requires secure=false)',
-      );
-    }
-  }
-
-  // RESEND_API_KEY/EMAIL_FROM/EMAIL_FROM_NAME are deliberately their own
-  // fields, not SMTP_*: EMAIL_PROVIDER=RESEND never touches SMTP config, and
-  // a deployment can have both sets configured at once (e.g. to keep SMTP
-  // credentials on file for an easy rollback) without ambiguity about which
-  // is currently in use — only EMAIL_PROVIDER decides that.
-  if (emailProvider === 'RESEND') {
-    const resendApiKeyRaw = config.RESEND_API_KEY;
-    if (typeof resendApiKeyRaw !== 'string' || resendApiKeyRaw.trim() === '') {
-      errors.push(
-        'RESEND_API_KEY is required when EMAIL_PROVIDER=RESEND and must be a non-empty string',
-      );
-    } else if (
-      nodeEnv === 'production' &&
-      looksLikePlaceholder(resendApiKeyRaw)
-    ) {
-      errors.push(
-        'RESEND_API_KEY looks like a placeholder value and must be replaced with a real Resend API key in production',
-      );
     }
 
     const emailFromRaw = config.EMAIL_FROM;
@@ -392,7 +282,7 @@ export function validateEnv(
       !EMAIL_PATTERN.test(emailFromRaw.trim())
     ) {
       errors.push(
-        'EMAIL_FROM is required when EMAIL_PROVIDER=RESEND and must be a valid email address',
+        'EMAIL_FROM is required to send email via the Gmail API and must be a valid email address',
       );
     }
 
@@ -402,16 +292,10 @@ export function validateEnv(
       emailFromNameRaw.trim() === ''
     ) {
       errors.push(
-        'EMAIL_FROM_NAME is required when EMAIL_PROVIDER=RESEND and must be a non-empty string',
+        'EMAIL_FROM_NAME is required to send email via the Gmail API and must be a non-empty string',
       );
     }
   }
-
-  const smtpFromNameRaw = config.SMTP_FROM_NAME;
-  const smtpFromName =
-    smtpFromNameRaw === undefined || smtpFromNameRaw === ''
-      ? ''
-      : (smtpFromNameRaw as string);
 
   const killSwitchRaw = config.KILL_SWITCH_ENABLED;
   const killSwitchEnabled =
@@ -541,15 +425,10 @@ export function validateEnv(
     PAPER_TRADING_INITIAL_BALANCE: paperTradingInitialBalance,
     FRONTEND_URL: frontendUrl,
     EMAIL_PROVIDER: emailProvider as EnvironmentVariables['EMAIL_PROVIDER'],
-    SMTP_HOST: (config.SMTP_HOST as string) ?? '',
-    SMTP_PORT: smtpPort,
-    SMTP_SECURE: smtpSecure,
-    SMTP_USER: (config.SMTP_USER as string) ?? '',
-    SMTP_PASS: (config.SMTP_PASS as string) ?? '',
-    SMTP_FROM: effectiveSmtpFrom || ((config.SMTP_FROM as string) ?? ''),
-    SMTP_FROM_NAME: smtpFromName,
-    SMTP_VERIFIED_SENDER: smtpVerifiedSender,
-    RESEND_API_KEY: (config.RESEND_API_KEY as string) ?? '',
+    GOOGLE_CLIENT_ID: (config.GOOGLE_CLIENT_ID as string) ?? '',
+    GOOGLE_CLIENT_SECRET: (config.GOOGLE_CLIENT_SECRET as string) ?? '',
+    GOOGLE_REFRESH_TOKEN: (config.GOOGLE_REFRESH_TOKEN as string) ?? '',
+    GOOGLE_REDIRECT_URI: (config.GOOGLE_REDIRECT_URI as string) ?? '',
     EMAIL_FROM: (config.EMAIL_FROM as string) ?? '',
     EMAIL_FROM_NAME: (config.EMAIL_FROM_NAME as string) ?? '',
   };

@@ -138,36 +138,26 @@ export class ConfigService {
     return this.nestConfigService.get('EMAIL_PROVIDER', { infer: true });
   }
 
-  get smtpHost(): string {
-    return this.nestConfigService.get('SMTP_HOST', { infer: true });
+  get googleClientId(): string {
+    return this.nestConfigService.get('GOOGLE_CLIENT_ID', { infer: true });
   }
 
-  get smtpPort(): number {
-    return this.nestConfigService.get('SMTP_PORT', { infer: true });
+  get googleClientSecret(): string {
+    return this.nestConfigService.get('GOOGLE_CLIENT_SECRET', {
+      infer: true,
+    });
   }
 
-  get smtpSecure(): boolean {
-    return this.nestConfigService.get('SMTP_SECURE', { infer: true });
+  get googleRefreshToken(): string {
+    return this.nestConfigService.get('GOOGLE_REFRESH_TOKEN', {
+      infer: true,
+    });
   }
 
-  get smtpUser(): string {
-    return this.nestConfigService.get('SMTP_USER', { infer: true });
-  }
-
-  get smtpPass(): string {
-    return this.nestConfigService.get('SMTP_PASS', { infer: true });
-  }
-
-  get smtpFrom(): string {
-    return this.nestConfigService.get('SMTP_FROM', { infer: true });
-  }
-
-  get smtpFromName(): string {
-    return this.nestConfigService.get('SMTP_FROM_NAME', { infer: true });
-  }
-
-  get resendApiKey(): string {
-    return this.nestConfigService.get('RESEND_API_KEY', { infer: true });
+  get googleRedirectUri(): string {
+    return this.nestConfigService.get('GOOGLE_REDIRECT_URI', {
+      infer: true,
+    });
   }
 
   get emailFrom(): string {
