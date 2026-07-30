@@ -6,7 +6,7 @@ import type { OrderModification } from './models/order-modification.model';
 import type { ExitRequest } from './models/exit-request.model';
 import type { OrderResponse } from './models/order-response.model';
 import { PaperExecutor } from './paper.executor';
-import { AngelOneExecutor } from './angel-one/angel-one.executor';
+import { DhanExecutor } from './dhan/dhan.executor';
 
 /**
  * The `ORDER_EXECUTOR` DI token's concrete implementation — resolves to
@@ -27,7 +27,7 @@ export class RoutingOrderExecutor implements IOrderExecutor {
   constructor(
     private readonly tradingModeService: TradingModeService,
     private readonly paperExecutor: PaperExecutor,
-    private readonly angelOneExecutor: AngelOneExecutor,
+    private readonly dhanExecutor: DhanExecutor,
   ) {}
 
   placeEntryOrder(request: OrderRequest): Promise<OrderResponse> {
@@ -58,7 +58,7 @@ export class RoutingOrderExecutor implements IOrderExecutor {
 
   private current(): IOrderExecutor {
     return this.tradingModeService.getCurrentMode() === 'LIVE'
-      ? this.angelOneExecutor
+      ? this.dhanExecutor
       : this.paperExecutor;
   }
 }

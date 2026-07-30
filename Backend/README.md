@@ -89,18 +89,21 @@ implementations exist today:
   instrument; in **deterministic mode** all timers are disabled and tests
   trigger ticks/heartbeats manually via `emitDeterministicTick()` /
   `emitDeterministicHeartbeat()` — no randomness, no timers, fully
-  reproducible. This is the **default** provider; no Angel One credentials are
+  reproducible. This is the **default** provider; no Dhan credentials are
   ever required to run the backend.
-- **AngelOneMarketDataProvider** (`providers/angel-one/`) — the production
-  adapter. The real transport is fully isolated behind `IWebSocketClient`, so
-  this class never touches a socket directly. It owns its own connection
-  lifecycle, subscription framing, ping/pong heartbeat, and exponential
-  backoff reconnection with jitter and a max-retry cap. Not exercised against
-  the real Angel One feed in this environment — verify against a
-  real/sandbox account before enabling Live market data.
+- **DhanMarketDataProvider** (`providers/dhan/`) — the production adapter for
+  DhanHQ v2's binary Live Market Feed. The real transport is fully isolated
+  behind `IWebSocketClient`, so this class never touches a socket directly.
+  It owns its own connection lifecycle, subscription framing (Full-packet
+  subscribe/unsubscribe JSON frames), and exponential backoff reconnection
+  with jitter and a max-retry cap. Dhan's protocol has no application-level
+  ping/pong text frames, so connection liveness is inferred from actually
+  receiving valid binary tick packets instead. Not exercised against the
+  real Dhan feed in this environment — verify against a real/sandbox account
+  before enabling Live market data.
 
 Switching providers is a **configuration-only** change:
-`MARKET_DATA_PROVIDER=MOCK` (default) or `MARKET_DATA_PROVIDER=ANGEL_ONE` in
+`MARKET_DATA_PROVIDER=MOCK` (default) or `MARKET_DATA_PROVIDER=DHAN` in
 `.env` — no code changes needed. `MarketDataModule` binds the `MARKET_DATA_PROVIDER`
 DI token to whichever provider `ConfigService.marketDataProvider` selects.
 
@@ -109,8 +112,9 @@ DI token to whichever provider `ConfigService.marketDataProvider` selects.
 Every provider's raw payload is converted to the broker-independent `Tick`
 model (`models/tick.model.ts`: instrumentToken, tradingSymbol, exchange,
 lastPrice, bid, ask, volume, openInterest, timestamp, sequenceNumber) before
-it ever leaves that provider. Angel One's normalizer
-(`providers/angel-one/angel-one-tick.normalizer.ts`) uses the shared
+it ever leaves that provider. Dhan's normalizer
+(`providers/dhan/dhan-tick.normalizer.ts`, fed by the separately-testable
+binary parser in `dhan-tick-binary.parser.ts`) uses the shared
 `Result<T, E>` type and never guesses: a malformed or token-mismatched payload
 is a `Result.fail`, silently dropped by the provider rather than propagated as
 a bad tick. A future broker plugs in by writing its own normalizer with the
@@ -142,12 +146,12 @@ duplicate broker subscriptions are structurally impossible.
 `MarketDataService.start()`/`stop()` connect/disconnect the active provider —
 nothing connects automatically at boot (a later Scheduler Service phase is
 responsible for triggering this as part of its Morning Startup routine, so a
-misconfigured Angel One provider can never block `npm start`). A
+misconfigured Dhan provider can never block `npm start`). A
 provider-agnostic heartbeat-staleness watchdog (`ReconnectOptions.heartbeatTimeoutMs`,
 checked every `heartbeatCheckIntervalMs` via the shared `ITimerScheduler`
 abstraction) calls `provider.reconnect()` if no heartbeat has been seen in
 time — this applies uniformly even when the Mock provider is active.
-`AngelOneMarketDataProvider` additionally reconnects its own socket
+`DhanMarketDataProvider` additionally reconnects its own socket
 automatically on an unexpected drop, using the same shared exponential
 backoff-with-jitter utility (`reconnect/reconnect-backoff.util.ts`), giving up
 after `maxRetries`.

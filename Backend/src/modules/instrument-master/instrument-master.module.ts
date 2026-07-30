@@ -5,7 +5,7 @@ import { ConfigModule } from '@core/config/config.module';
 import { ConfigService } from '@core/config/config.service';
 import { HTTP_CLIENT } from '@shared/http/http-client.constants';
 import { FetchHttpClient } from '@shared/http/fetch-http-client';
-import { AngelOneInstrumentMasterProvider } from '@modules/broker/angel-one/angel-one-instrument-master.provider';
+import { DhanInstrumentMasterProvider } from '@modules/broker/dhan/dhan-instrument-master.provider';
 import {
   InstrumentDocumentSchema,
   InstrumentMongooseSchema,
@@ -31,21 +31,19 @@ import {
   providers: [
     { provide: HTTP_CLIENT, useClass: FetchHttpClient },
     MockInstrumentMasterProvider,
-    AngelOneInstrumentMasterProvider,
+    DhanInstrumentMasterProvider,
     {
       provide: INSTRUMENT_MASTER_PROVIDER,
       useFactory: (
         configService: ConfigService,
         mock: MockInstrumentMasterProvider,
-        angelOne: AngelOneInstrumentMasterProvider,
+        dhan: DhanInstrumentMasterProvider,
       ): IInstrumentMasterProvider =>
-        configService.instrumentMasterProvider === 'ANGEL_ONE'
-          ? angelOne
-          : mock,
+        configService.instrumentMasterProvider === 'DHAN' ? dhan : mock,
       inject: [
         ConfigService,
         MockInstrumentMasterProvider,
-        AngelOneInstrumentMasterProvider,
+        DhanInstrumentMasterProvider,
       ],
     },
     { provide: INSTRUMENT_REPOSITORY, useClass: InstrumentMasterRepository },

@@ -106,6 +106,41 @@ describe('DailyRiskStateService', () => {
     expect(state.tradeCount).toBe(2);
   });
 
+  it('never loses an update when two trades complete concurrently (regression: read-modify-write race)', async () => {
+    // Two TradeCompletedEvents firing close together — e.g. two different
+    // trades on two instruments both hitting their exit condition on the
+    // same tick batch — must never both read the same stale state and
+    // clobber each other's write. Deliberately NOT awaited individually
+    // before starting the next call, to reproduce the interleaving the fix
+    // guards against.
+    const repo = repository();
+    const service = new DailyRiskStateService(
+      repo,
+      eventBus().bus,
+      new FakeClock(),
+      riskPolicyService(),
+      eventPublisher() as unknown as RiskEventPublisher,
+    );
+
+    const [first, second, third] = await Promise.all([
+      service.recordTradeOutcome(100),
+      service.recordTradeOutcome(-50),
+      service.recordTradeOutcome(200),
+    ]);
+
+    // Every call resolves to the fully-accumulated final state (each
+    // sees the result of the ones ahead of it in the chain) — never a
+    // stale intermediate value.
+    expect(third.tradeCount).toBe(3);
+    expect(third.realizedPnl).toBe(250);
+    expect(first.tradeCount).toBeLessThanOrEqual(second.tradeCount);
+    expect(second.tradeCount).toBeLessThanOrEqual(third.tradeCount);
+
+    const finalState = await service.getState();
+    expect(finalState.tradeCount).toBe(3);
+    expect(finalState.realizedPnl).toBe(250);
+  });
+
   it('increments consecutive losses on a loss and resets on a win', async () => {
     const repo = repository();
     const service = new DailyRiskStateService(
@@ -156,8 +191,7 @@ describe('DailyRiskStateService', () => {
 
     await service.onModuleInit();
     emit(new TradeCompletedEvent('trade-1', -250));
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     const state = await service.getState();
     expect(state.realizedPnl).toBe(-250);

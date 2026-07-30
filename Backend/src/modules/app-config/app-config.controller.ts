@@ -4,11 +4,11 @@ import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { CurrentUser } from '@modules/auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '@modules/auth/models/authenticated-user.model';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
-import { BROKER_NAME_ANGEL_ONE } from '@modules/broker/broker-auth/broker-auth.constants';
+import { BROKER_NAME_DHAN } from '@modules/broker/broker-auth/broker-auth.constants';
 import {
-  AngelOneAccountService,
+  DhanAccountService,
   type BrokerAccountSummary,
-} from '@modules/broker/broker-auth/angel-one-account.service';
+} from '@modules/broker/broker-auth/dhan-account.service';
 import { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import { BusinessException } from '@common/exceptions/business.exception';
@@ -66,7 +66,7 @@ export class AppConfigController {
     private readonly tradingModeService: TradingModeService,
     private readonly brokerSessionManager: BrokerSessionManager,
     private readonly brokerHealthService: BrokerHealthService,
-    private readonly angelOneAccountService: AngelOneAccountService,
+    private readonly dhanAccountService: DhanAccountService,
   ) {}
 
   @Get('trading-mode')
@@ -107,7 +107,7 @@ export class AppConfigController {
     if (tradingMode === 'PAPER') {
       return {
         tradingMode,
-        brokerName: BROKER_NAME_ANGEL_ONE,
+        brokerName: BROKER_NAME_DHAN,
         connected: false,
         authStatus: HealthStatus.UNKNOWN,
         clientCode: null,
@@ -122,7 +122,7 @@ export class AppConfigController {
     const snapshot = this.brokerHealthService.getSnapshot();
     return {
       tradingMode,
-      brokerName: BROKER_NAME_ANGEL_ONE,
+      brokerName: BROKER_NAME_DHAN,
       connected: this.brokerSessionManager.isSessionValid(),
       authStatus: snapshot.authStatus,
       clientCode: session?.clientCode ?? null,
@@ -163,8 +163,8 @@ export class AppConfigController {
   /**
    * PAPER never has a broker account to summarize — `supported: false` with
    * a reason, not fabricated zeros. In LIVE mode, every numeric field the
-   * real Angel One RMS call didn't return (or couldn't be parsed) is `null`,
-   * never guessed — see `AngelOneAccountService`'s own contract.
+   * real Dhan RMS call didn't return (or couldn't be parsed) is `null`,
+   * never guessed — see `DhanAccountService`'s own contract.
    */
   @Get('broker-account-summary')
   @UseGuards(JwtAuthGuard)
@@ -194,7 +194,7 @@ export class AppConfigController {
       };
     }
 
-    const summary = await this.angelOneAccountService.getFundsSummary(session);
+    const summary = await this.dhanAccountService.getFundsSummary(session);
     return { ...summary, supported: true, reason: null };
   }
 

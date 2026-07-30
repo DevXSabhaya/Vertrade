@@ -12,7 +12,7 @@ function session(expiresInMs: number): BrokerSession {
   const issuedAt = new Date(CLOCK_BASE_MS);
   return new BrokerSession(
     'CLIENT1',
-    new BrokerToken('jwt', 'refresh', 'feed'),
+    new BrokerToken('access-token'),
     issuedAt,
     new Date(CLOCK_BASE_MS + expiresInMs),
   );

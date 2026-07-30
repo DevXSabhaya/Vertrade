@@ -44,9 +44,9 @@ describe('Auth + paper trading pipeline (e2e)', () => {
         .mockResolvedValue([
           new Instrument(
             'E2E-P12-TOKEN',
-            'NSE',
-            'EQ',
-            'RELIANCE-EQ',
+            'NSE_EQ',
+            'EQUITY',
+            'RELIANCE',
             'RELIANCE',
             null,
             null,

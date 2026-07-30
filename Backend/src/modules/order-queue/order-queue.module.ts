@@ -6,6 +6,8 @@ import { MarketDataModule } from '@modules/market-data/market-data.module';
 import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
+import { TIMER_SCHEDULER } from '@shared/scheduler/timer-scheduler.constants';
+import { NativeTimerScheduler } from '@shared/scheduler/native-timer-scheduler';
 import { OrderQueueService } from './order-queue.service';
 import { QueueWorker } from './queue-worker.service';
 import { LockManager } from './lock/lock-manager';
@@ -46,6 +48,7 @@ import { DEFAULT_RETRY_OPTIONS } from './models/retry-options.model';
     LockManager,
     QueueMetricsService,
     { provide: CLOCK, useClass: SystemClock },
+    { provide: TIMER_SCHEDULER, useClass: NativeTimerScheduler },
     { provide: QUEUE_REPOSITORY, useClass: QueueItemRepository },
     { provide: RETRY_OPTIONS, useValue: DEFAULT_RETRY_OPTIONS },
     { provide: LOCK_TIMEOUT_MS, useValue: DEFAULT_LOCK_TIMEOUT_MS },

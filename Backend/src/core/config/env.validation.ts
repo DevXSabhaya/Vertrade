@@ -2,14 +2,14 @@ export interface EnvironmentVariables {
   NODE_ENV: 'development' | 'production' | 'test';
   PORT: number;
   MONGODB_URI: string;
-  ANGEL_ONE_API_KEY: string;
-  ANGEL_ONE_CLIENT_CODE: string;
-  ANGEL_ONE_PASSWORD: string;
-  ANGEL_ONE_TOTP_SECRET: string;
-  ANGEL_ONE_API_SECRET: string;
+  DHAN_CLIENT_ID: string;
+  DHAN_API_KEY: string;
+  DHAN_ACCESS_TOKEN: string;
+  DHAN_REST_URL: string;
+  DHAN_WS_URL: string;
   TOKEN_ENCRYPTION_KEY: string;
-  MARKET_DATA_PROVIDER: 'MOCK' | 'ANGEL_ONE';
-  INSTRUMENT_MASTER_PROVIDER: 'MOCK' | 'ANGEL_ONE';
+  MARKET_DATA_PROVIDER: 'MOCK' | 'DHAN';
+  INSTRUMENT_MASTER_PROVIDER: 'MOCK' | 'DHAN';
   TRADING_MODE: 'PAPER' | 'LIVE';
   KILL_SWITCH_ENABLED: boolean;
   HEALTH_CHECK_INTERVAL_MS: number;
@@ -40,15 +40,23 @@ const REQUIRED_STRING_KEYS: ReadonlyArray<keyof EnvironmentVariables> = [
 
 // Only required when TRADING_MODE=LIVE — a Paper-only deployment must be able
 // to boot without ever supplying real broker credentials.
+//
+// DHAN_API_KEY is deliberately NOT in this list. Per DhanHQ's official v2
+// authentication docs (https://dhanhq.co/docs/v2/authentication/), an API
+// key/secret is only needed for the OAuth "consent" flow used to *obtain* an
+// access token for a partner app — it is never sent on, or required for, any
+// actual REST/WebSocket call once a valid DHAN_ACCESS_TOKEN exists. The
+// supported flow here is the simpler one: an operator generates a 24-hour
+// access token manually in the Dhan web console (My Profile -> Access
+// DhanHQ APIs) and supplies only DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN.
+// Requiring DHAN_API_KEY would incorrectly block that legitimate, documented
+// path from ever reaching LIVE mode.
 const LIVE_MODE_REQUIRED_STRING_KEYS: ReadonlyArray<
   keyof EnvironmentVariables
-> = [
-  'ANGEL_ONE_API_KEY',
-  'ANGEL_ONE_CLIENT_CODE',
-  'ANGEL_ONE_PASSWORD',
-  'ANGEL_ONE_TOTP_SECRET',
-  'ANGEL_ONE_API_SECRET',
-];
+> = ['DHAN_CLIENT_ID', 'DHAN_ACCESS_TOKEN'];
+
+const DEFAULT_DHAN_REST_URL = 'https://api.dhan.co/v2';
+const DEFAULT_DHAN_WS_URL = 'wss://api-feed.dhan.co';
 
 function isValidNodeEnv(
   value: unknown,
@@ -59,7 +67,7 @@ function isValidNodeEnv(
 function isValidMarketDataProvider(
   value: unknown,
 ): value is EnvironmentVariables['MARKET_DATA_PROVIDER'] {
-  return value === 'MOCK' || value === 'ANGEL_ONE';
+  return value === 'MOCK' || value === 'DHAN';
 }
 
 function isValidTradingMode(
@@ -179,7 +187,7 @@ export function validateEnv(
   // Defaulting these to a flat 'MOCK' regardless of TRADING_MODE let a real
   // LIVE deployment silently run on synthetic/mock instrument and price data
   // whenever an operator forgot to also set these two — indistinguishable
-  // from real Angel One data to both the operator and the frontend. Only the
+  // from real Dhan data to both the operator and the frontend. Only the
   // *default* (unset) case is tied to TRADING_MODE; an explicit override
   // still wins either way, e.g. pointing a LIVE deployment's market data at
   // MOCK for a rehearsal remains possible if deliberately configured.
@@ -187,11 +195,11 @@ export function validateEnv(
   const marketDataProvider =
     marketDataProviderRaw === undefined || marketDataProviderRaw === ''
       ? tradingMode === 'LIVE'
-        ? 'ANGEL_ONE'
+        ? 'DHAN'
         : 'MOCK'
       : marketDataProviderRaw;
   if (!isValidMarketDataProvider(marketDataProvider)) {
-    errors.push('MARKET_DATA_PROVIDER must be either MOCK or ANGEL_ONE');
+    errors.push('MARKET_DATA_PROVIDER must be either MOCK or DHAN');
   }
 
   const instrumentMasterProviderRaw = config.INSTRUMENT_MASTER_PROVIDER;
@@ -199,11 +207,11 @@ export function validateEnv(
     instrumentMasterProviderRaw === undefined ||
     instrumentMasterProviderRaw === ''
       ? tradingMode === 'LIVE'
-        ? 'ANGEL_ONE'
+        ? 'DHAN'
         : 'MOCK'
       : instrumentMasterProviderRaw;
   if (!isValidMarketDataProvider(instrumentMasterProvider)) {
-    errors.push('INSTRUMENT_MASTER_PROVIDER must be either MOCK or ANGEL_ONE');
+    errors.push('INSTRUMENT_MASTER_PROVIDER must be either MOCK or DHAN');
   }
 
   // Real broker credentials are only ever a hard requirement once LIVE
@@ -222,11 +230,26 @@ export function validateEnv(
         // exact value this repo's own .env.example ships for Paper-only
         // local dev) must never be silently accepted as if it were real.
         errors.push(
-          `${key} looks like a placeholder value — TRADING_MODE=LIVE requires a real Angel One credential, not a placeholder`,
+          `${key} looks like a placeholder value — TRADING_MODE=LIVE requires a real Dhan credential, not a placeholder`,
         );
       }
     }
   }
+
+  // DHAN_REST_URL/DHAN_WS_URL default to Dhan's real documented v2 endpoints
+  // — an operator only ever needs to override these for a sandbox/mock
+  // Dhan-compatible endpoint, never for normal production use.
+  const dhanRestUrlRaw = config.DHAN_REST_URL;
+  const dhanRestUrl =
+    typeof dhanRestUrlRaw === 'string' && dhanRestUrlRaw.trim() !== ''
+      ? dhanRestUrlRaw.trim()
+      : DEFAULT_DHAN_REST_URL;
+
+  const dhanWsUrlRaw = config.DHAN_WS_URL;
+  const dhanWsUrl =
+    typeof dhanWsUrlRaw === 'string' && dhanWsUrlRaw.trim() !== ''
+      ? dhanWsUrlRaw.trim()
+      : DEFAULT_DHAN_WS_URL;
 
   // Trimmed defensively — a value pasted into a dashboard env var editor
   // (Render, etc.) commonly picks up a trailing space or newline, which
@@ -403,11 +426,11 @@ export function validateEnv(
     NODE_ENV: nodeEnv,
     PORT: port,
     MONGODB_URI: config.MONGODB_URI as string,
-    ANGEL_ONE_API_KEY: config.ANGEL_ONE_API_KEY as string,
-    ANGEL_ONE_CLIENT_CODE: config.ANGEL_ONE_CLIENT_CODE as string,
-    ANGEL_ONE_PASSWORD: config.ANGEL_ONE_PASSWORD as string,
-    ANGEL_ONE_TOTP_SECRET: config.ANGEL_ONE_TOTP_SECRET as string,
-    ANGEL_ONE_API_SECRET: config.ANGEL_ONE_API_SECRET as string,
+    DHAN_CLIENT_ID: (config.DHAN_CLIENT_ID as string) ?? '',
+    DHAN_API_KEY: (config.DHAN_API_KEY as string) ?? '',
+    DHAN_ACCESS_TOKEN: (config.DHAN_ACCESS_TOKEN as string) ?? '',
+    DHAN_REST_URL: dhanRestUrl,
+    DHAN_WS_URL: dhanWsUrl,
     TOKEN_ENCRYPTION_KEY: config.TOKEN_ENCRYPTION_KEY as string,
     MARKET_DATA_PROVIDER:
       marketDataProvider as EnvironmentVariables['MARKET_DATA_PROVIDER'],

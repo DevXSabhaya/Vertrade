@@ -12,6 +12,8 @@ import { PnLService } from './pnl.service';
 import { composeTradeRecord } from './domain/trade-record-composer';
 import type { TradeRecord } from './models/trade-record.model';
 import { TradeRecordNotFoundException } from './exceptions/trade-record-not-found.exception';
+import { TRADE_HISTORY_REPOSITORY } from './trade-lifecycle.constants';
+import type { ITradeHistoryRepository } from './interfaces/trade-history-repository.interface';
 
 /**
  * The Phase 10 "Active Trade Repository" / position cache: everything the
@@ -34,6 +36,8 @@ export class PositionManager implements OnModuleInit {
     private readonly pnlService: PnLService,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
     @Inject(CLOCK) private readonly clock: IClock,
+    @Inject(TRADE_HISTORY_REPOSITORY)
+    private readonly historyRepository: ITradeHistoryRepository,
   ) {}
 
   onModuleInit(): void {
@@ -57,12 +61,51 @@ export class PositionManager implements OnModuleInit {
       return cached;
     }
     if (!this.tradingEngineService.hasTrade(tradeId)) {
+      // Not in the live engine — either it never existed, or it's a
+      // terminal trade that TradingEngineService.pruneCompletedTrades()
+      // already evicted from memory. Either way, TradeLifecycleService
+      // durably archives every trade to TradeHistoryRepository the moment
+      // it goes terminal, so a pruned (not merely nonexistent) trade is
+      // still findable there — never lost, just no longer in RAM.
+      const archived = await this.historyRepository.findById(tradeId);
+      if (archived) {
+        this.cache.set(tradeId, archived);
+        return archived;
+      }
       throw new TradeRecordNotFoundException(
         `No trade found with id ${tradeId}`,
       );
     }
     const snapshot = this.tradingEngineService.getTrade(tradeId);
     return this.composeOne(snapshot);
+  }
+
+  /**
+   * Evicts terminal (non-active) cache entries older than `maxAgeMs` —
+   * the `PositionManager`-local counterpart to
+   * `TradingEngineService.pruneCompletedTrades()`. Without this, `cache`
+   * grows without bound too: any endpoint that ever reads a terminal
+   * trade (e.g. `GET /trades` before it was pruned from the live engine,
+   * or the history fallback above) leaves a permanent entry here, since
+   * a terminal trade never fires another event to invalidate it via
+   * `onAnyEvent()`. An active trade is never pruned, regardless of age.
+   */
+  pruneCache(maxAgeMs: number): number {
+    const now = this.clock.now().getTime();
+    let removedCount = 0;
+
+    for (const [tradeId, record] of this.cache) {
+      if (!TradeStateTransitions.isTerminal(record.status)) {
+        continue;
+      }
+      const ageMs = now - new Date(record.updatedAt).getTime();
+      if (ageMs > maxAgeMs) {
+        this.cache.delete(tradeId);
+        removedCount += 1;
+      }
+    }
+
+    return removedCount;
   }
 
   private async composeMany(

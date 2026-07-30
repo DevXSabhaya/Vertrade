@@ -1,30 +1,22 @@
 import { inspect } from 'node:util';
 
-/** Same redaction discipline as BrokerCredentials — the JWT/refresh/feed tokens must never leak. */
+/**
+ * DhanHQ issues a single access token used for both REST calls (the
+ * `access-token` header) and the WebSocket live market feed (an auth query
+ * param) — unlike Angel One's three-token model (jwt/refresh/feed), there is
+ * only one secret to carry here. Same redaction discipline as
+ * BrokerCredentials — the token must never leak via logging.
+ */
 export class BrokerToken {
-  constructor(
-    private readonly jwtToken: string,
-    private readonly refreshToken: string,
-    private readonly feedToken: string,
-  ) {}
+  constructor(private readonly accessToken: string) {}
 
-  getJwtToken(): string {
-    return this.jwtToken;
-  }
-
-  getRefreshToken(): string {
-    return this.refreshToken;
-  }
-
-  getFeedToken(): string {
-    return this.feedToken;
+  getAccessToken(): string {
+    return this.accessToken;
   }
 
   toJSON(): Record<string, unknown> {
     return {
-      jwtToken: '[REDACTED]',
-      refreshToken: '[REDACTED]',
-      feedToken: '[REDACTED]',
+      accessToken: '[REDACTED]',
     };
   }
 

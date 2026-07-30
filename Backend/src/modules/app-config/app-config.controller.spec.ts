@@ -3,7 +3,7 @@ import type { TradingModeService } from '@modules/trading-mode/trading-mode.serv
 import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import type { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
-import type { AngelOneAccountService } from '@modules/broker/broker-auth/angel-one-account.service';
+import type { DhanAccountService } from '@modules/broker/broker-auth/dhan-account.service';
 import { BusinessException } from '@common/exceptions/business.exception';
 import { AppConfigController } from './app-config.controller';
 
@@ -32,9 +32,7 @@ function buildController(options: {
       'isSessionValid' | 'getActiveSession' | 'ensureSession' | 'logout'
     >
   >;
-  angelOneAccountService: jest.Mocked<
-    Pick<AngelOneAccountService, 'getFundsSummary'>
-  >;
+  dhanAccountService: jest.Mocked<Pick<DhanAccountService, 'getFundsSummary'>>;
   tradingModeService: { getCurrentMode: jest.Mock; setMode: jest.Mock };
 } {
   const configService = {
@@ -67,7 +65,7 @@ function buildController(options: {
       timestamp: options.timestamp ?? '2026-01-01T00:00:00.000Z',
     }),
   } as unknown as BrokerHealthService;
-  const angelOneAccountService = {
+  const dhanAccountService = {
     getFundsSummary: jest.fn().mockResolvedValue(
       options.fundsSummary ?? {
         availableBalance: null,
@@ -84,13 +82,13 @@ function buildController(options: {
     tradingModeService as unknown as TradingModeService,
     brokerSessionManager as unknown as BrokerSessionManager,
     brokerHealthService,
-    angelOneAccountService as unknown as AngelOneAccountService,
+    dhanAccountService as unknown as DhanAccountService,
   );
 
   return {
     controller,
     brokerSessionManager,
-    angelOneAccountService,
+    dhanAccountService,
     tradingModeService,
   };
 }
@@ -157,7 +155,7 @@ describe('AppConfigController', () => {
       const { controller } = buildController({ tradingMode: 'PAPER' });
       expect(controller.getBrokerStatus()).toEqual({
         tradingMode: 'PAPER',
-        brokerName: 'angel-one',
+        brokerName: 'dhan',
         connected: false,
         authStatus: HealthStatus.UNKNOWN,
         clientCode: null,
@@ -181,7 +179,7 @@ describe('AppConfigController', () => {
       });
       expect(controller.getBrokerStatus()).toEqual({
         tradingMode: 'LIVE',
-        brokerName: 'angel-one',
+        brokerName: 'dhan',
         connected: true,
         authStatus: HealthStatus.HEALTHY,
         clientCode: 'ABC123',
@@ -260,7 +258,7 @@ describe('AppConfigController', () => {
 
   describe('getBrokerAccountSummary', () => {
     it('reports unsupported in PAPER mode without ever calling the broker API', async () => {
-      const { controller, angelOneAccountService } = buildController({
+      const { controller, dhanAccountService } = buildController({
         tradingMode: 'PAPER',
       });
 
@@ -269,11 +267,11 @@ describe('AppConfigController', () => {
       expect(result.supported).toBe(false);
       expect(result.reason).toMatch(/paper trading/i);
       expect(result.availableBalance).toBeNull();
-      expect(angelOneAccountService.getFundsSummary).not.toHaveBeenCalled();
+      expect(dhanAccountService.getFundsSummary).not.toHaveBeenCalled();
     });
 
     it('reports unsupported in LIVE mode with no active session, without calling the broker API', async () => {
-      const { controller, angelOneAccountService } = buildController({
+      const { controller, dhanAccountService } = buildController({
         tradingMode: 'LIVE',
         isSessionValid: false,
         clientCode: null,
@@ -283,7 +281,7 @@ describe('AppConfigController', () => {
 
       expect(result.supported).toBe(false);
       expect(result.reason).toMatch(/connect the broker/i);
-      expect(angelOneAccountService.getFundsSummary).not.toHaveBeenCalled();
+      expect(dhanAccountService.getFundsSummary).not.toHaveBeenCalled();
     });
 
     it('returns the real funds summary in LIVE mode with a valid session', async () => {

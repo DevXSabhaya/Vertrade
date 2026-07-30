@@ -28,10 +28,10 @@ function googleConfig(
 }
 
 describe('validateEnv', () => {
-  it('boots successfully in PAPER mode with no Angel One credentials set', () => {
+  it('boots successfully in PAPER mode with no Dhan credentials set', () => {
     const env = validateEnv(baseConfig({ TRADING_MODE: 'PAPER' }));
     expect(env.TRADING_MODE).toBe('PAPER');
-    expect(env.ANGEL_ONE_API_KEY).toBeUndefined();
+    expect(env.DHAN_CLIENT_ID).toBe('');
   });
 
   it('defaults to PAPER mode when TRADING_MODE is unset', () => {
@@ -39,24 +39,28 @@ describe('validateEnv', () => {
     expect(env.TRADING_MODE).toBe('PAPER');
   });
 
-  it('fails to boot in LIVE mode without Angel One credentials', () => {
+  it('fails to boot in LIVE mode without Dhan credentials', () => {
     expect(() => validateEnv(baseConfig({ TRADING_MODE: 'LIVE' }))).toThrow(
-      /ANGEL_ONE_API_KEY is required when TRADING_MODE=LIVE/,
+      /DHAN_CLIENT_ID is required when TRADING_MODE=LIVE/,
     );
   });
 
-  it('boots successfully in LIVE mode when all Angel One credentials are set', () => {
+  it('boots successfully in LIVE mode when all Dhan credentials are set', () => {
     const env = validateEnv(
       baseConfig({
         TRADING_MODE: 'LIVE',
-        ANGEL_ONE_API_KEY: 'key',
-        ANGEL_ONE_CLIENT_CODE: 'code',
-        ANGEL_ONE_PASSWORD: 'pass',
-        ANGEL_ONE_TOTP_SECRET: 'totp',
-        ANGEL_ONE_API_SECRET: 'secret',
+        DHAN_CLIENT_ID: 'client-id',
+        DHAN_API_KEY: 'api-key',
+        DHAN_ACCESS_TOKEN: 'access-token',
       }),
     );
     expect(env.TRADING_MODE).toBe('LIVE');
+  });
+
+  it("defaults DHAN_REST_URL and DHAN_WS_URL to Dhan's documented v2 endpoints", () => {
+    const env = validateEnv(baseConfig());
+    expect(env.DHAN_REST_URL).toBe('https://api.dhan.co/v2');
+    expect(env.DHAN_WS_URL).toBe('wss://api-feed.dhan.co');
   });
 
   it('defaults INSTRUMENT_MASTER_PROVIDER to MOCK', () => {
@@ -67,22 +71,20 @@ describe('validateEnv', () => {
   it('rejects an invalid INSTRUMENT_MASTER_PROVIDER value', () => {
     expect(() =>
       validateEnv(baseConfig({ INSTRUMENT_MASTER_PROVIDER: 'NOT_REAL' })),
-    ).toThrow(/INSTRUMENT_MASTER_PROVIDER must be either MOCK or ANGEL_ONE/);
+    ).toThrow(/INSTRUMENT_MASTER_PROVIDER must be either MOCK or DHAN/);
   });
 
-  it('defaults MARKET_DATA_PROVIDER and INSTRUMENT_MASTER_PROVIDER to ANGEL_ONE in LIVE mode — a flat MOCK default would let a live deployment silently trade/chart off synthetic data', () => {
+  it('defaults MARKET_DATA_PROVIDER and INSTRUMENT_MASTER_PROVIDER to DHAN in LIVE mode — a flat MOCK default would let a live deployment silently trade/chart off synthetic data', () => {
     const env = validateEnv(
       baseConfig({
         TRADING_MODE: 'LIVE',
-        ANGEL_ONE_API_KEY: 'key',
-        ANGEL_ONE_CLIENT_CODE: 'code',
-        ANGEL_ONE_PASSWORD: 'pass',
-        ANGEL_ONE_TOTP_SECRET: 'totp',
-        ANGEL_ONE_API_SECRET: 'secret',
+        DHAN_CLIENT_ID: 'client-id',
+        DHAN_API_KEY: 'api-key',
+        DHAN_ACCESS_TOKEN: 'access-token',
       }),
     );
-    expect(env.MARKET_DATA_PROVIDER).toBe('ANGEL_ONE');
-    expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('ANGEL_ONE');
+    expect(env.MARKET_DATA_PROVIDER).toBe('DHAN');
+    expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('DHAN');
   });
 
   it('still honors an explicit MOCK override in LIVE mode (e.g. a rehearsal deployment)', () => {
@@ -91,11 +93,9 @@ describe('validateEnv', () => {
         TRADING_MODE: 'LIVE',
         MARKET_DATA_PROVIDER: 'MOCK',
         INSTRUMENT_MASTER_PROVIDER: 'MOCK',
-        ANGEL_ONE_API_KEY: 'key',
-        ANGEL_ONE_CLIENT_CODE: 'code',
-        ANGEL_ONE_PASSWORD: 'pass',
-        ANGEL_ONE_TOTP_SECRET: 'totp',
-        ANGEL_ONE_API_SECRET: 'secret',
+        DHAN_CLIENT_ID: 'client-id',
+        DHAN_API_KEY: 'api-key',
+        DHAN_ACCESS_TOKEN: 'access-token',
       }),
     );
     expect(env.MARKET_DATA_PROVIDER).toBe('MOCK');
@@ -348,33 +348,43 @@ describe('validateEnv', () => {
     function liveConfig(overrides: Record<string, unknown> = {}) {
       return baseConfig({
         TRADING_MODE: 'LIVE',
-        ANGEL_ONE_API_KEY: 'real-api-key-abc123',
-        ANGEL_ONE_CLIENT_CODE: 'real-client-code',
-        ANGEL_ONE_PASSWORD: 'real-password',
-        ANGEL_ONE_TOTP_SECRET: 'JBSWY3DPEHPK3PXP',
-        ANGEL_ONE_API_SECRET: 'real-api-secret-xyz789',
+        DHAN_CLIENT_ID: 'real-client-id-1000000132',
+        DHAN_API_KEY: 'real-api-key-abc123',
+        DHAN_ACCESS_TOKEN: 'real-access-token-xyz789',
         ...overrides,
       });
     }
 
-    it("rejects a placeholder ANGEL_ONE_API_KEY (exactly this repo's own .env.example shape)", () => {
-      expect(() =>
-        validateEnv(liveConfig({ ANGEL_ONE_API_KEY: 'placeholder-api-key' })),
-      ).toThrow(/ANGEL_ONE_API_KEY looks like a placeholder value/);
-    });
-
-    it('rejects a "changeme"-shaped ANGEL_ONE_PASSWORD', () => {
-      expect(() =>
-        validateEnv(liveConfig({ ANGEL_ONE_PASSWORD: 'changeme123' })),
-      ).toThrow(/ANGEL_ONE_PASSWORD looks like a placeholder value/);
-    });
-
-    it('rejects a "your-..."-shaped ANGEL_ONE_CLIENT_CODE', () => {
+    it("rejects a placeholder DHAN_ACCESS_TOKEN (exactly this repo's own .env.example shape)", () => {
       expect(() =>
         validateEnv(
-          liveConfig({ ANGEL_ONE_CLIENT_CODE: 'your-client-code-here' }),
+          liveConfig({ DHAN_ACCESS_TOKEN: 'placeholder-access-token' }),
         ),
-      ).toThrow(/ANGEL_ONE_CLIENT_CODE looks like a placeholder value/);
+      ).toThrow(/DHAN_ACCESS_TOKEN looks like a placeholder value/);
+    });
+
+    it("never requires or validates DHAN_API_KEY — per DhanHQ's official docs it is only used by the OAuth consent flow, never by the operator-generated-web-token flow this app uses", () => {
+      expect(() =>
+        validateEnv(liveConfig({ DHAN_API_KEY: undefined })),
+      ).not.toThrow();
+
+      // Even a placeholder-shaped value must not be rejected, since this key
+      // is never actually validated.
+      expect(() =>
+        validateEnv(liveConfig({ DHAN_API_KEY: 'placeholder-api-key' })),
+      ).not.toThrow();
+    });
+
+    it('rejects a "changeme"-shaped DHAN_ACCESS_TOKEN', () => {
+      expect(() =>
+        validateEnv(liveConfig({ DHAN_ACCESS_TOKEN: 'changeme123' })),
+      ).toThrow(/DHAN_ACCESS_TOKEN looks like a placeholder value/);
+    });
+
+    it('rejects a "your-..."-shaped DHAN_CLIENT_ID', () => {
+      expect(() =>
+        validateEnv(liveConfig({ DHAN_CLIENT_ID: 'your-client-id-here' })),
+      ).toThrow(/DHAN_CLIENT_ID looks like a placeholder value/);
     });
 
     it('boots successfully in LIVE mode with real-looking credentials', () => {
@@ -387,10 +397,10 @@ describe('validateEnv', () => {
         validateEnv(
           liveConfig({
             NODE_ENV: 'development',
-            ANGEL_ONE_API_SECRET: 'placeholder-api-secret',
+            DHAN_ACCESS_TOKEN: 'placeholder-access-token',
           }),
         ),
-      ).toThrow(/ANGEL_ONE_API_SECRET looks like a placeholder value/);
+      ).toThrow(/DHAN_ACCESS_TOKEN looks like a placeholder value/);
     });
   });
 });

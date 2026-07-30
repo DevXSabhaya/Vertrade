@@ -140,7 +140,7 @@ describe('PaperTradingService', () => {
       );
     });
 
-    it('threads an explicit liveTradingConfirmed: true through into metadata — this is the only way AngelOneExecutor will ever place a real entry order (LiveOrderSafetyGateService requires it in addition to the LIVE_TRADING_ENABLED flag and a healthy broker)', async () => {
+    it('threads an explicit liveTradingConfirmed: true through into metadata — this is the only way DhanExecutor will ever place a real entry order (LiveOrderSafetyGateService requires it in addition to the LIVE_TRADING_ENABLED flag and a healthy broker)', async () => {
       const { service, orderQueueService } = buildService({});
 
       await service.createTrade('user-1', dto({ liveTradingConfirmed: true }));

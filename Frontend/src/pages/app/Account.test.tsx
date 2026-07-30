@@ -241,7 +241,7 @@ describe('Account page', () => {
     it('surfaces the backend safety rejection and leaves the mode unchanged (no silent fallback)', async () => {
       vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
       vi.mocked(configService.setTradingMode).mockRejectedValue(
-        new Error('Cannot switch to LIVE mode: no Angel One broker credentials are configured.'),
+        new Error('Cannot switch to LIVE mode: no Dhan broker credentials are configured.'),
       )
       const user = userEvent.setup()
       renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
@@ -250,7 +250,7 @@ describe('Account page', () => {
       await user.click(screen.getByRole('button', { name: 'Confirm' }))
 
       expect(
-        await screen.findByText(/no Angel One broker credentials are configured/),
+        await screen.findByText(/no Dhan broker credentials are configured/),
       ).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Paper Trading' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Live Trading' })).not.toBeDisabled()

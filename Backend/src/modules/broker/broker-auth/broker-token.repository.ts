@@ -13,9 +13,7 @@ import { decrypt, encrypt } from './utils/encryption.util';
 
 interface StoredTokenPayload {
   clientCode: string;
-  jwtToken: string;
-  refreshToken: string;
-  feedToken: string;
+  accessToken: string;
   issuedAt: string;
 }
 
@@ -34,9 +32,7 @@ export class BrokerTokenRepository implements IBrokerTokenRepository {
   ): Promise<void> {
     const payload: StoredTokenPayload = {
       clientCode: session.clientCode,
-      jwtToken: session.token.getJwtToken(),
-      refreshToken: session.token.getRefreshToken(),
-      feedToken: session.token.getFeedToken(),
+      accessToken: session.token.getAccessToken(),
       issuedAt: session.issuedAt.toISOString(),
     };
 
@@ -68,11 +64,7 @@ export class BrokerTokenRepository implements IBrokerTokenRepository {
 
     return new BrokerSession(
       payload.clientCode,
-      new BrokerToken(
-        payload.jwtToken,
-        payload.refreshToken,
-        payload.feedToken,
-      ),
+      new BrokerToken(payload.accessToken),
       new Date(payload.issuedAt),
       doc.expiresAt,
     );

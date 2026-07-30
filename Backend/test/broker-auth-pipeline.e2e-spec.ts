@@ -11,7 +11,7 @@ import type { IBrokerAuth } from '../src/modules/broker/broker-auth/interfaces/b
 
 /**
  * Proves the Phase 2 pipeline end-to-end against real MongoDB WITHOUT ever
- * calling the real Angel One API: BROKER_AUTH is overridden with an in-memory
+ * calling the real Dhan API: BROKER_AUTH is overridden with an in-memory
  * stub, while everything downstream (BrokerSessionManager, the Event Bus,
  * AuditLogSubscriber, BrokerTokenRepository's encryption) is real.
  */
@@ -22,11 +22,7 @@ describe('Broker auth pipeline (e2e)', () => {
 
   const fakeSession = new BrokerSession(
     'E2E_CLIENT',
-    new BrokerToken(
-      'fake-jwt-token-value',
-      'fake-refresh-token-value',
-      'fake-feed-token-value',
-    ),
+    new BrokerToken('fake-access-token-value'),
     new Date(),
     new Date(Date.now() + 60_000),
   );
@@ -55,7 +51,7 @@ describe('Broker auth pipeline (e2e)', () => {
     await app.close();
   });
 
-  it('logs in without ever calling the real Angel One API', async () => {
+  it('logs in without ever calling the real Dhan API', async () => {
     const sessionManager = app.get(BrokerSessionManager);
 
     const session = await sessionManager.login();
@@ -68,14 +64,12 @@ describe('Broker auth pipeline (e2e)', () => {
     const brokerTokens = connection.collection('brokerTokens');
     const doc = await brokerTokens.findOne({
       userId: 'system',
-      broker: 'angel-one',
+      broker: 'dhan',
     });
 
     expect(doc).not.toBeNull();
     expect(doc?.['encryptedPayload']).toEqual(expect.any(String));
-    expect(doc?.['encryptedPayload']).not.toContain('fake-jwt-token-value');
-    expect(doc?.['encryptedPayload']).not.toContain('fake-refresh-token-value');
-    expect(doc?.['encryptedPayload']).not.toContain('fake-feed-token-value');
+    expect(doc?.['encryptedPayload']).not.toContain('fake-access-token-value');
   });
 
   it('records a real audit log entry for the login event, via the Event Bus, not a direct call', async () => {
@@ -108,7 +102,7 @@ describe('Broker auth pipeline (e2e)', () => {
     const brokerTokens = connection.collection('brokerTokens');
     const doc = await brokerTokens.findOne({
       userId: 'system',
-      broker: 'angel-one',
+      broker: 'dhan',
     });
     expect(doc).toBeNull();
 

@@ -7,6 +7,8 @@ import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module
 import { InstrumentMasterModule } from '@modules/instrument-master/instrument-master.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
 import { OrderQueueModule } from '@modules/order-queue/order-queue.module';
+import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
+import { TradeLifecycleModule } from '@modules/trade-lifecycle/trade-lifecycle.module';
 import { BrokerHealthModule } from '@modules/broker-health/broker-health.module';
 import { RiskManagementModule } from '@modules/risk-management/risk-management.module';
 import { CLOCK } from '@shared/clock/clock.constants';
@@ -60,6 +62,8 @@ const JOB_PROVIDERS = [
     InstrumentMasterModule,
     MarketDataModule,
     OrderQueueModule,
+    TradingEngineModule,
+    TradeLifecycleModule,
     BrokerHealthModule,
     RiskManagementModule,
     MongooseModule.forFeature([

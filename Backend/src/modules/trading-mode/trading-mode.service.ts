@@ -81,9 +81,9 @@ export class TradingModeService {
    * only being discovered when the first live order is attempted).
    */
   private async assertLiveModeIsSafe(): Promise<void> {
-    if (!this.configService.hasAngelOneCredentials) {
+    if (!this.configService.hasDhanCredentials) {
       throw new BusinessException(
-        'Cannot switch to LIVE mode: no Angel One broker credentials are configured for this deployment.',
+        'Cannot switch to LIVE mode: no Dhan broker credentials are configured for this deployment.',
       );
     }
 

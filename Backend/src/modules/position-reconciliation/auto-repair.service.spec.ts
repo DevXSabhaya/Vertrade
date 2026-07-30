@@ -4,7 +4,7 @@ import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.e
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
 import { AutoRepairService } from './auto-repair.service';
@@ -71,7 +71,7 @@ describe('AutoRepairService', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      } as unknown as AngelOneExecutor,
+      } as unknown as DhanExecutor,
       clock,
     );
     service = new AutoRepairService(
@@ -139,7 +139,7 @@ describe('AutoRepairService', () => {
       const engineWithControlledExecutor = new TradingEngineService(
         eventBus,
         executor as unknown as PaperExecutor,
-        executor as unknown as AngelOneExecutor,
+        executor as unknown as DhanExecutor,
         clock,
       );
       const pending = engineWithControlledExecutor.createTrade({

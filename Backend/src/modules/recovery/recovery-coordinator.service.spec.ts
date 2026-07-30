@@ -9,7 +9,7 @@ import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.e
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { TradeSnapshot } from '@modules/trading-engine/domain/trade-snapshot';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import type { OrderQueueService } from '@modules/order-queue/order-queue.service';
 import type { PositionReconciliationService } from '@modules/position-reconciliation/position-reconciliation.service';
 import type { RiskPolicyService } from '@modules/risk-management/risk-policy.service';
@@ -207,7 +207,7 @@ describe('RecoveryCoordinator', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      } as unknown as AngelOneExecutor,
+      } as unknown as DhanExecutor,
       clock,
     );
     orderQueueService = { getAllItems: jest.fn().mockReturnValue([]) };

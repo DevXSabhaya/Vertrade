@@ -20,7 +20,11 @@ export class FetchHttpClient implements IHttpClient {
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
 
-    const body = (await response.json()) as T;
+    const body = (
+      options.responseType === 'text'
+        ? await response.text()
+        : await response.json()
+    ) as T;
     return { status: response.status, body };
   }
 }

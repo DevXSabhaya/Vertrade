@@ -8,7 +8,7 @@ import { FakeClock } from '../testing/fake-clock';
 function fakeSession(): BrokerSession {
   return new BrokerSession(
     'CLIENT1',
-    new BrokerToken('jwt', 'refresh', 'feed'),
+    new BrokerToken('access-token'),
     new Date(),
     new Date(Date.now() + 3_600_000),
   );

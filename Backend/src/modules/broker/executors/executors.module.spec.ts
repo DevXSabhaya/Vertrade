@@ -3,32 +3,32 @@ import { selectOrderExecutor } from './select-order-executor.util';
 
 describe('selectOrderExecutor', () => {
   const paperExecutor = { name: 'paper' } as unknown as IOrderExecutor;
-  const angelOneExecutor = { name: 'angel-one' } as unknown as IOrderExecutor;
+  const dhanExecutor = { name: 'dhan' } as unknown as IOrderExecutor;
 
   it('selects PaperExecutor when TRADING_MODE is PAPER', () => {
     const selected = selectOrderExecutor(
       { tradingMode: 'PAPER' },
       paperExecutor,
-      angelOneExecutor,
+      dhanExecutor,
     );
     expect(selected).toBe(paperExecutor);
   });
 
-  it('selects AngelOneExecutor when TRADING_MODE is LIVE', () => {
+  it('selects DhanExecutor when TRADING_MODE is LIVE', () => {
     const selected = selectOrderExecutor(
       { tradingMode: 'LIVE' },
       paperExecutor,
-      angelOneExecutor,
+      dhanExecutor,
     );
-    expect(selected).toBe(angelOneExecutor);
+    expect(selected).toBe(dhanExecutor);
   });
 
-  it('never falls back to AngelOneExecutor unless LIVE is explicitly set', () => {
+  it('never falls back to DhanExecutor unless LIVE is explicitly set', () => {
     const selected = selectOrderExecutor(
       { tradingMode: 'PAPER' },
       paperExecutor,
-      angelOneExecutor,
+      dhanExecutor,
     );
-    expect(selected).not.toBe(angelOneExecutor);
+    expect(selected).not.toBe(dhanExecutor);
   });
 });

@@ -104,7 +104,7 @@ async function bootstrap(): Promise<void> {
     // The mock provider is entirely in-memory (no network call) and small
     // (~10 equities + a handful of index option chains) — cheap either way —
     // but is still deferred so it can never be the reason the HTTP port
-    // opens late. The real Angel One provider intentionally stays on its
+    // opens late. The real Dhan provider intentionally stays on its
     // cron-only refresh schedule (see InstrumentMasterService.onModuleInit)
     // and is never triggered here.
     app

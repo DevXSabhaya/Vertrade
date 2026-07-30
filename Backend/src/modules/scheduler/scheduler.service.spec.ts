@@ -31,6 +31,7 @@ const config: SchedulerConfig = {
   marketOpenTime: '09:15',
   marketCloseTime: '15:30',
   riskMaintenanceIntervalMs: 4_000,
+  completedItemRetentionMs: 24 * 60 * 60 * 1000,
 };
 
 describe('SchedulerService', () => {
@@ -107,6 +108,81 @@ describe('SchedulerService', () => {
       const result = await service.triggerMarketClose();
       expect(result.jobName).toBe(JobName.MARKET_CLOSE);
       expect(jobs[JobName.MARKET_CLOSE].run).toHaveBeenCalled();
+    });
+
+    it('skips an overlapping invocation of the same job rather than running it twice concurrently', async () => {
+      let resolveRun: (() => void) | undefined;
+      const slowRun = jest.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveRun = resolve;
+          }),
+      );
+      jobs[JobName.INSTRUMENT_REFRESH] = fakeJob(
+        JobName.INSTRUMENT_REFRESH,
+        slowRun,
+      );
+      const registry = new JobRegistry(Object.values(jobs));
+      service = new SchedulerService(
+        registry,
+        featureFlagsService as unknown as FeatureFlagsService,
+        metrics,
+        eventBus,
+        clock,
+        scheduler,
+        config,
+        repository,
+      );
+
+      // First invocation is still in flight (its job never resolves until we
+      // call resolveRun below) when the second one is fired — simulating the
+      // next interval tick landing before a slow job finished.
+      const firstRun = service.runJob(JobName.INSTRUMENT_REFRESH);
+      await Promise.resolve();
+      const secondResult = await service.runJob(JobName.INSTRUMENT_REFRESH);
+
+      expect(secondResult.skipped).toBe(true);
+      expect(secondResult.succeeded).toBe(false);
+      expect(slowRun).toHaveBeenCalledTimes(1);
+
+      resolveRun?.();
+      const firstResult = await firstRun;
+      expect(firstResult.succeeded).toBe(true);
+      expect(firstResult.skipped).toBeUndefined();
+    });
+
+    it('a different job is never blocked by another job that is still in flight', async () => {
+      let resolveRun: (() => void) | undefined;
+      jobs[JobName.INSTRUMENT_REFRESH] = fakeJob(
+        JobName.INSTRUMENT_REFRESH,
+        jest.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveRun = resolve;
+            }),
+        ),
+      );
+      const registry = new JobRegistry(Object.values(jobs));
+      service = new SchedulerService(
+        registry,
+        featureFlagsService as unknown as FeatureFlagsService,
+        metrics,
+        eventBus,
+        clock,
+        scheduler,
+        config,
+        repository,
+      );
+
+      const firstRun = service.runJob(JobName.INSTRUMENT_REFRESH);
+      await Promise.resolve();
+      const healthCheckResult = await service.runJob(JobName.HEALTH_CHECK);
+
+      expect(healthCheckResult.skipped).toBeUndefined();
+      expect(healthCheckResult.succeeded).toBe(true);
+
+      resolveRun?.();
+      await firstRun;
     });
 
     it('start() registers periodic intervals for health check, instrument refresh, and cleanup', async () => {

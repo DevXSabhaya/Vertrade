@@ -8,7 +8,7 @@ import { HealthStatus } from '../models/health-status.enum';
 
 /**
  * A genuine REST reachability probe would require an authenticated ping call
- * against Angel One's live API — unavailable in this environment (no live
+ * against Dhan's live API — unavailable in this environment (no live
  * credentials, and health checks must never trigger network calls
  * aggressively). This indicator instead uses a documented, honest proxy: a
  * valid, non-expired broker session implies the last REST handshake (login)

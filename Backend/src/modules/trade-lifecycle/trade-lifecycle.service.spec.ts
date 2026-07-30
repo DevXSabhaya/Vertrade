@@ -6,7 +6,7 @@ import { TradingEngineService } from '@modules/trading-engine/trading-engine.ser
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
 import { EntryFilledEvent } from '@modules/trading-engine/events/entry-filled.event';
@@ -48,7 +48,7 @@ function buildHarness() {
   const tradingEngineService = new TradingEngineService(
     eventBus,
     executor as unknown as PaperExecutor,
-    executor as unknown as AngelOneExecutor,
+    executor as unknown as DhanExecutor,
     clock,
   );
   const extensionStore = new TradeExtensionStore(

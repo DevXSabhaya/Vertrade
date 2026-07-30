@@ -91,8 +91,17 @@ export class KillSwitchService implements OnModuleInit {
       deactivatedAt: null,
       updatedAt: now,
     };
-    await this.repository.save(updated);
+    // Set the cache BEFORE awaiting the DB write: two near-simultaneous
+    // activate() calls (e.g. a double-click, or two admins) would otherwise
+    // both pass the idempotency check above (both reading the same
+    // not-yet-updated `this.cached` while the first call's save() is still
+    // in flight), producing two DB writes, two killSwitchActivated events,
+    // and — for EMERGENCY_STOP — two concurrent emergency-exit passes over
+    // the same positions. Setting it synchronously here closes that window:
+    // the second call's own idempotency check now sees the already-applied
+    // state and returns early instead of racing.
     this.cached = updated;
+    await this.repository.save(updated);
     this.eventPublisher.killSwitchActivated(status, reason, activatedBy);
 
     if (status === KillSwitchStatus.EMERGENCY_STOP) {

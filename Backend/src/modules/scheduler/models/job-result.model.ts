@@ -7,4 +7,6 @@ export interface JobResult {
   readonly finishedAt: string;
   readonly durationMs: number;
   readonly error: string | null;
+  /** True when this invocation didn't actually run — an earlier invocation of the same job was still in flight. Never recorded to metrics/history/events, since nothing happened. */
+  readonly skipped?: boolean;
 }

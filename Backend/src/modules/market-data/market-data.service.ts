@@ -40,7 +40,7 @@ import {
  * subscribes to MarketPriceUpdatedEvent on the Event Bus, exactly as
  * forward-declared in Phase 5. Everything provider-agnostic (subscription
  * refcounting, heartbeat-staleness watchdog, health reporting) lives here so
- * it applies uniformly whether the active provider is Mock or Angel One.
+ * it applies uniformly whether the active provider is Mock or Dhan.
  */
 @Injectable()
 export class MarketDataService implements OnModuleInit, OnModuleDestroy {
@@ -228,8 +228,8 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   }
 
   private currentProviderType(): MarketDataProviderType {
-    return this.configService.marketDataProvider === 'ANGEL_ONE'
-      ? MarketDataProviderType.ANGEL_ONE
+    return this.configService.marketDataProvider === 'DHAN'
+      ? MarketDataProviderType.DHAN
       : MarketDataProviderType.MOCK;
   }
 }

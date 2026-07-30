@@ -13,6 +13,7 @@ import { QueueItemType } from './models/queue-item-type.enum';
 import { QueueItemState } from './models/queue-item-state.enum';
 import { FakeClock } from './testing/fake-clock';
 import { FakeQueueItemRepository } from './testing/fake-queue-item-repository';
+import { InstantTimerScheduler } from './testing/instant-timer-scheduler';
 import {
   buildRequest,
   buildResolvedInstrument,
@@ -94,6 +95,7 @@ describe('QueueWorker', () => {
         subscribeInstrument: () => Promise.resolve(),
       } as unknown as MarketDataService,
       tradingModeService,
+      new InstantTimerScheduler(),
     );
   });
 
@@ -132,6 +134,7 @@ describe('QueueWorker', () => {
       configService,
       { subscribeInstrument } as unknown as MarketDataService,
       tradingModeService,
+      new InstantTimerScheduler(),
     );
     tradingEngineService.createTrade.mockReturnValue(
       fakeTradeSnapshot('trade-sub-1'),
@@ -164,6 +167,7 @@ describe('QueueWorker', () => {
       configService,
       { subscribeInstrument } as unknown as MarketDataService,
       tradingModeService,
+      new InstantTimerScheduler(),
     );
     tradingEngineService.createTrade.mockReturnValue(
       fakeTradeSnapshot('trade-sub-2'),
@@ -246,6 +250,54 @@ describe('QueueWorker', () => {
         ),
       ).toBe(true);
       expect(metrics.snapshot(0, 0).failed).toBe(1);
+    });
+
+    it('actually waits out the computed exponential-backoff delay before retrying — never hammers the broker back-to-back', async () => {
+      // Regression test: retry used to publish the computed delayMs for
+      // observability but then retry immediately regardless, defeating
+      // exponential backoff entirely. This proves the scheduler is asked to
+      // actually wait — a spy scheduler that never fires its callback means
+      // the retry (and thus a second createTrade call) must never happen.
+      const scheduler = {
+        setTimeout: jest.fn(),
+        clearTimeout: jest.fn(),
+        setInterval: jest.fn(),
+        clearInterval: jest.fn(),
+      };
+      const nonFiringWorker = new QueueWorker(
+        lockManager,
+        tradingEngineService as unknown as TradingEngineService,
+        eventBus,
+        clock,
+        retryOptions,
+        metrics,
+        repository,
+        configService,
+        {
+          subscribeInstrument: () => Promise.resolve(),
+        } as unknown as MarketDataService,
+        tradingModeService,
+        scheduler,
+      );
+      tradingEngineService.createTrade.mockImplementation(() => {
+        throw new Error('transient failure');
+      });
+
+      const item = buildItem(clock);
+      // Deliberately not awaited to completion — the scheduler never fires,
+      // so this promise chain intentionally never resolves; we only assert
+      // on what happened synchronously before that point.
+      void nonFiringWorker.enqueue(item, 'owner-1');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(tradingEngineService.createTrade).toHaveBeenCalledTimes(1);
+      expect(scheduler.setTimeout).toHaveBeenCalledTimes(1);
+      const [, delayMs] = scheduler.setTimeout.mock.calls[0] as [
+        () => void,
+        number,
+      ];
+      expect(delayMs).toBe(retryOptions.baseDelayMs);
+      expect(item.state).toBe(QueueItemState.RETRYING);
     });
 
     it('never retries a permanent (validation-shaped) failure', async () => {
@@ -341,6 +393,7 @@ describe('QueueWorker', () => {
           subscribeInstrument: () => Promise.resolve(),
         } as unknown as MarketDataService,
         tradingModeService,
+        new InstantTimerScheduler(),
       );
       const item = buildItem(clock);
 

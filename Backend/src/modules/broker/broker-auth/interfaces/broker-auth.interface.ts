@@ -2,7 +2,7 @@ import type { BrokerSession } from '../entities/broker-session.entity';
 
 /**
  * The rest of the application depends only on this interface — never on
- * AngelOneBrokerAuth directly — so a future Zerodha/Upstox/Fyers/Shoonya
+ * DhanBrokerAuth directly — so a future Zerodha/Upstox/Fyers/Shoonya
  * broker-auth adapter can be added without touching any consumer.
  */
 export interface IBrokerAuth {

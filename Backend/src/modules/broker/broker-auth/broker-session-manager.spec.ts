@@ -14,7 +14,7 @@ import { BrokerLogoutCompletedEvent } from './events/broker-logout-completed.eve
 function createSession(expiresInMs = 60_000): BrokerSession {
   return new BrokerSession(
     'C123',
-    new BrokerToken('jwt', 'refresh', 'feed'),
+    new BrokerToken('access-token'),
     new Date(),
     new Date(Date.now() + expiresInMs),
   );
@@ -81,7 +81,7 @@ describe('BrokerSessionManager', () => {
       expect(manager.getActiveSession()).toBe(session);
       expect(tokenRepository.save).toHaveBeenCalledWith(
         'system',
-        'angel-one',
+        'dhan',
         session,
       );
       expect(eventBus.publish).toHaveBeenNthCalledWith(
@@ -138,7 +138,7 @@ describe('BrokerSessionManager', () => {
       expect(manager.getActiveSession()).toBe(refreshed);
       expect(tokenRepository.save).toHaveBeenCalledWith(
         'system',
-        'angel-one',
+        'dhan',
         refreshed,
       );
       expect(eventBus.publish).toHaveBeenCalledWith(
@@ -157,7 +157,7 @@ describe('BrokerSessionManager', () => {
       await expect(manager.refresh()).rejects.toThrow('refresh token expired');
 
       expect(manager.getActiveSession()).toBeNull();
-      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'angel-one');
+      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'dhan');
       expect(eventBus.publish).toHaveBeenCalledWith(
         expect.any(BrokerSessionExpiredEvent),
       );
@@ -178,7 +178,7 @@ describe('BrokerSessionManager', () => {
       await manager.logout();
 
       expect(brokerAuth.logout).toHaveBeenCalledWith(session);
-      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'angel-one');
+      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'dhan');
       expect(manager.getActiveSession()).toBeNull();
       expect(eventBus.publish).toHaveBeenCalledWith(
         expect.any(BrokerLogoutCompletedEvent),
@@ -211,6 +211,53 @@ describe('BrokerSessionManager', () => {
       const result = await manager.ensureSession();
 
       expect(result).toBe(refreshed);
+    });
+
+    it("shares a single in-flight refresh across concurrent callers instead of calling the broker twice (regression: RenewToken invalidates the token it is called with, so a second concurrent refresh can invalidate the first one's freshly-issued token)", async () => {
+      const session = createSession();
+      brokerAuth.login.mockResolvedValue(session);
+      await manager.login();
+      brokerAuth.validateSession.mockReturnValue(false);
+
+      let resolveRefresh: ((session: BrokerSession) => void) | undefined;
+      brokerAuth.refresh.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+
+      // Two callers hit the expired session at nearly the same time — e.g.
+      // an order placement and the market-data WebSocket both reconnecting.
+      const first = manager.ensureSession();
+      const second = manager.ensureSession();
+
+      const refreshed = createSession();
+      resolveRefresh?.(refreshed);
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(brokerAuth.refresh).toHaveBeenCalledTimes(1);
+      expect(firstResult).toBe(refreshed);
+      expect(secondResult).toBe(refreshed);
+    });
+
+    it('shares a single in-flight login across concurrent callers when there is no session at all', async () => {
+      let resolveLogin: ((session: BrokerSession) => void) | undefined;
+      brokerAuth.login.mockReturnValue(
+        new Promise((resolve) => {
+          resolveLogin = resolve;
+        }),
+      );
+
+      const first = manager.ensureSession();
+      const second = manager.ensureSession();
+
+      const session = createSession();
+      resolveLogin?.(session);
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(brokerAuth.login).toHaveBeenCalledTimes(1);
+      expect(firstResult).toBe(session);
+      expect(secondResult).toBe(session);
     });
 
     it('logs in when there is no current session at all', async () => {

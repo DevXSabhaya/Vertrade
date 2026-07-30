@@ -6,10 +6,10 @@ import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-cr
 import { FetchBrokerHttpClient } from '@modules/broker/broker-auth/fetch-broker-http-client';
 import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { PaperExecutor } from './paper.executor';
-import { AngelOneExecutor } from './angel-one/angel-one.executor';
+import { DhanExecutor } from './dhan/dhan.executor';
 import { LiveOrderSafetyGateService } from './live-order-safety-gate.service';
 import { RoutingOrderExecutor } from './routing-order-executor';
-import { ORDER_HTTP_CLIENT } from './angel-one/angel-one-executor.constants';
+import { ORDER_HTTP_CLIENT } from './dhan/dhan-executor.constants';
 import { ORDER_EXECUTOR } from './order-executor.constants';
 
 /**
@@ -38,13 +38,13 @@ import { ORDER_EXECUTOR } from './order-executor.constants';
     BrokerCredentialsProvider,
     { provide: ORDER_HTTP_CLIENT, useClass: FetchBrokerHttpClient },
     LiveOrderSafetyGateService,
-    AngelOneExecutor,
+    DhanExecutor,
     RoutingOrderExecutor,
     { provide: ORDER_EXECUTOR, useExisting: RoutingOrderExecutor },
   ],
   exports: [
     PaperExecutor,
-    AngelOneExecutor,
+    DhanExecutor,
     ORDER_EXECUTOR,
     LiveOrderSafetyGateService,
   ],

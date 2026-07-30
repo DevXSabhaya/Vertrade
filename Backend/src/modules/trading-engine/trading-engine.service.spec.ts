@@ -4,7 +4,7 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { IClock } from '@shared/clock/clock.interface';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import type { OrderRequest } from '@modules/broker/executors/models/order-request.model';
 import type { ExitRequest } from '@modules/broker/executors/models/exit-request.model';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
@@ -150,7 +150,7 @@ describe('TradingEngineService', () => {
     service = new TradingEngineService(
       eventBus,
       executor as unknown as PaperExecutor,
-      executor as unknown as AngelOneExecutor,
+      executor as unknown as DhanExecutor,
       clock,
     );
   });
@@ -340,6 +340,57 @@ describe('TradingEngineService', () => {
     });
   });
 
+  describe('pruneCompletedTrades (memory bounding)', () => {
+    it('keeps memory bounded after tens of thousands of completed trades, while never touching an active one', async () => {
+      const TRADE_COUNT = 20_000;
+      for (let i = 0; i < TRADE_COUNT; i += 1) {
+        const snapshot = service.createTrade(
+          tradeParams({ instrumentToken: `BULK-${i}` }),
+        );
+        await service.cancelTrade(snapshot.id, 'bulk cleanup test');
+      }
+      const activeSnapshot = service.createTrade(
+        tradeParams({ instrumentToken: 'STILL-ACTIVE' }),
+      );
+
+      expect(service.getAllTrades()).toHaveLength(TRADE_COUNT + 1);
+
+      const removedCount = service.pruneCompletedTrades(0);
+
+      expect(removedCount).toBe(TRADE_COUNT);
+      // Every terminal trade is gone from memory...
+      expect(service.getAllTrades()).toHaveLength(1);
+      // ...but the one still-open trade survives untouched, regardless of
+      // how aggressive the retention window is.
+      expect(service.hasTrade(activeSnapshot.id)).toBe(true);
+      expect(service.getTrade(activeSnapshot.id).state).toBe(
+        TradeState.WAITING_ENTRY,
+      );
+    }, 30_000);
+
+    it('never prunes a trade younger than maxAgeMs, even if terminal', async () => {
+      const snapshot = service.createTrade(tradeParams());
+      await service.cancelTrade(snapshot.id, 'test');
+
+      const removedCount = service.pruneCompletedTrades(24 * 60 * 60 * 1000);
+
+      expect(removedCount).toBe(0);
+      expect(service.hasTrade(snapshot.id)).toBe(true);
+    });
+
+    it('never prunes a non-terminal trade, however old it claims to be', () => {
+      const snapshot = service.createTrade(tradeParams());
+
+      const removedCount = service.pruneCompletedTrades(0);
+
+      expect(removedCount).toBe(0);
+      expect(service.hasTrade(snapshot.id)).toBe(true);
+      expect(service.getTrade(snapshot.id).state).toBe(
+        TradeState.WAITING_ENTRY,
+      );
+    });
+  });
+
   describe('recovery', () => {
     it('enters and resumes from recovery', async () => {
       const snapshot = service.createTrade(tradeParams());
@@ -445,7 +496,7 @@ describe('TradingEngineService', () => {
       const freshService = new TradingEngineService(
         eventBus,
         executor as unknown as PaperExecutor,
-        executor as unknown as AngelOneExecutor,
+        executor as unknown as DhanExecutor,
         clock,
       );
 
@@ -471,7 +522,7 @@ describe('TradingEngineService', () => {
       const freshService = new TradingEngineService(
         eventBus,
         executor as unknown as PaperExecutor,
-        executor as unknown as AngelOneExecutor,
+        executor as unknown as DhanExecutor,
         clock,
       );
       publishSpy.mockClear();
@@ -563,7 +614,7 @@ describe('TradingEngineService', () => {
       const wiredService = new TradingEngineService(
         realBus,
         executor as unknown as PaperExecutor,
-        executor as unknown as AngelOneExecutor,
+        executor as unknown as DhanExecutor,
         clock,
       );
       const snapshot = wiredService.createTrade(tradeParams());
@@ -579,21 +630,21 @@ describe('TradingEngineService', () => {
 
   describe('per-trade executor routing', () => {
     let paperExecutor: FakeOrderExecutor;
-    let angelOneExecutor: FakeOrderExecutor;
+    let dhanExecutor: FakeOrderExecutor;
     let routingService: TradingEngineService;
 
     beforeEach(() => {
       paperExecutor = new FakeOrderExecutor();
-      angelOneExecutor = new FakeOrderExecutor();
+      dhanExecutor = new FakeOrderExecutor();
       routingService = new TradingEngineService(
         eventBus,
         paperExecutor as unknown as PaperExecutor,
-        angelOneExecutor as unknown as AngelOneExecutor,
+        dhanExecutor as unknown as DhanExecutor,
         clock,
       );
     });
 
-    it("routes a PAPER-mode trade's entry to PaperExecutor only, never AngelOneExecutor", async () => {
+    it("routes a PAPER-mode trade's entry to PaperExecutor only, never DhanExecutor", async () => {
       const snapshot = routingService.createTrade(
         tradeParams({ mode: 'PAPER', instrumentToken: 'TOKEN-PAPER' }),
       );
@@ -601,20 +652,20 @@ describe('TradingEngineService', () => {
       await routingService.handleMarketPriceUpdate('TOKEN-PAPER', 100);
 
       expect(paperExecutor.placeEntryOrderCalls).toHaveLength(1);
-      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(0);
+      expect(dhanExecutor.placeEntryOrderCalls).toHaveLength(0);
       expect(routingService.getTrade(snapshot.id).state).toBe(
         TradeState.ACTIVE,
       );
     });
 
-    it("routes a LIVE-mode trade's entry to AngelOneExecutor only, never PaperExecutor", async () => {
+    it("routes a LIVE-mode trade's entry to DhanExecutor only, never PaperExecutor", async () => {
       const snapshot = routingService.createTrade(
         tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-LIVE' }),
       );
 
       await routingService.handleMarketPriceUpdate('TOKEN-LIVE', 100);
 
-      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(1);
+      expect(dhanExecutor.placeEntryOrderCalls).toHaveLength(1);
       expect(paperExecutor.placeEntryOrderCalls).toHaveLength(0);
       expect(routingService.getTrade(snapshot.id).state).toBe(
         TradeState.ACTIVE,
@@ -633,18 +684,18 @@ describe('TradingEngineService', () => {
       await routingService.handleMarketPriceUpdate('TOKEN-B', 100);
 
       expect(paperExecutor.placeEntryOrderCalls).toHaveLength(1);
-      expect(angelOneExecutor.placeEntryOrderCalls).toHaveLength(1);
+      expect(dhanExecutor.placeEntryOrderCalls).toHaveLength(1);
 
       // Exit each — still must stay on its own originally-pinned executor.
       await routingService.requestFullExit(paperTrade.id, 110);
       await routingService.requestFullExit(liveTrade.id, 110);
 
       expect(paperExecutor.exitPositionCalls).toHaveLength(1);
-      expect(angelOneExecutor.exitPositionCalls).toHaveLength(1);
+      expect(dhanExecutor.exitPositionCalls).toHaveLength(1);
     });
 
-    it('cancelling a LIVE-mode trade before entry fills routes cancelOrder to AngelOneExecutor, not PaperExecutor', async () => {
-      angelOneExecutor.nextEntryResponse = new OrderResponse(
+    it('cancelling a LIVE-mode trade before entry fills routes cancelOrder to DhanExecutor, not PaperExecutor', async () => {
+      dhanExecutor.nextEntryResponse = new OrderResponse(
         'LIVE-PENDING-1',
         OrderStatus.OPEN,
         0,
@@ -661,7 +712,7 @@ describe('TradingEngineService', () => {
 
       await routingService.cancelTrade(snapshot.id, 'user requested');
 
-      expect(angelOneExecutor.cancelOrderCalls).toHaveLength(1);
+      expect(dhanExecutor.cancelOrderCalls).toHaveLength(1);
       expect(paperExecutor.cancelOrderCalls).toHaveLength(0);
     });
   });

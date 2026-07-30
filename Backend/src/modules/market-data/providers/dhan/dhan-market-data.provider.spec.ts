@@ -12,9 +12,35 @@ import type {
   IWebSocketClient,
   WebSocketCloseInfo,
 } from '../websocket-client.interface';
-import { AngelOneMarketDataProvider } from './angel-one-market-data.provider';
+import { DhanMarketDataProvider } from './dhan-market-data.provider';
+import {
+  DHAN_FEED_RESPONSE_CODE_FULL,
+  DHAN_FEED_RESPONSE_CODE_OI,
+} from './dhan-market-data.constants';
 
-const NIFTY = new MarketDataInstrument('NFO', 'NIFTY24500CE', 'TOKEN-1');
+const NIFTY = new MarketDataInstrument('NSE_FNO', 'NIFTY24500CE', '49081');
+
+function buildFullPacket(securityId: number, lastPrice: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(8 + 54);
+  const view = new DataView(buffer);
+  view.setUint8(0, DHAN_FEED_RESPONSE_CODE_FULL);
+  view.setInt16(1, buffer.byteLength, true);
+  view.setUint8(3, 2);
+  view.setInt32(4, securityId, true);
+  view.setFloat32(8, lastPrice, true);
+  return buffer;
+}
+
+function buildOiPacket(securityId: number, oi: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(12);
+  const view = new DataView(buffer);
+  view.setUint8(0, DHAN_FEED_RESPONSE_CODE_OI);
+  view.setInt16(1, buffer.byteLength, true);
+  view.setUint8(3, 2);
+  view.setInt32(4, securityId, true);
+  view.setInt32(8, oi, true);
+  return buffer;
+}
 
 class FakeWebSocketClient implements IWebSocketClient {
   open = false;
@@ -22,7 +48,7 @@ class FakeWebSocketClient implements IWebSocketClient {
   connectUrls: string[] = [];
   shouldFailConnect = false;
 
-  private messageHandler: ((data: string) => void) | null = null;
+  private messageHandler: ((data: string | ArrayBuffer) => void) | null = null;
   private openHandler: (() => void) | null = null;
   private closeHandler: ((info: WebSocketCloseInfo) => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
@@ -56,7 +82,7 @@ class FakeWebSocketClient implements IWebSocketClient {
     return this.open;
   }
 
-  onMessage(handler: (data: string) => void): void {
+  onMessage(handler: (data: string | ArrayBuffer) => void): void {
     this.messageHandler = handler;
   }
 
@@ -72,7 +98,7 @@ class FakeWebSocketClient implements IWebSocketClient {
     this.errorHandler = handler;
   }
 
-  simulateMessage(data: string): void {
+  simulateMessage(data: string | ArrayBuffer): void {
     this.messageHandler?.(data);
   }
 
@@ -85,7 +111,7 @@ class FakeWebSocketClient implements IWebSocketClient {
 function createFakeSession(): BrokerSession {
   return new BrokerSession(
     'CLIENT1',
-    new BrokerToken('jwt-value', 'refresh-value', 'feed-token-value'),
+    new BrokerToken('access-token-value'),
     new Date(),
     new Date(Date.now() + 3_600_000),
   );
@@ -94,12 +120,7 @@ function createFakeSession(): BrokerSession {
 function createCredentialsProvider(): BrokerCredentialsProvider {
   return {
     getCredentials: () =>
-      new BrokerCredentials(
-        'api-key',
-        'CLIENT1',
-        'password',
-        'JBSWY3DPEHPK3PXP',
-      ),
+      new BrokerCredentials('CLIENT1', 'api-key', 'access-token-value'),
   } as unknown as BrokerCredentialsProvider;
 }
 
@@ -117,13 +138,13 @@ function reconnectOptions(
   };
 }
 
-describe('AngelOneMarketDataProvider', () => {
+describe('DhanMarketDataProvider', () => {
   let wsClient: FakeWebSocketClient;
   let sessionManager: jest.Mocked<
     Pick<BrokerSessionManager, 'ensureSession' | 'refresh'>
   >;
   let scheduler: FakeTimerScheduler;
-  let provider: AngelOneMarketDataProvider;
+  let provider: DhanMarketDataProvider;
 
   beforeEach(() => {
     wsClient = new FakeWebSocketClient();
@@ -132,7 +153,7 @@ describe('AngelOneMarketDataProvider', () => {
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     };
     scheduler = new FakeTimerScheduler();
-    provider = new AngelOneMarketDataProvider(
+    provider = new DhanMarketDataProvider(
       createCredentialsProvider(),
       sessionManager as unknown as BrokerSessionManager,
       wsClient,
@@ -142,24 +163,17 @@ describe('AngelOneMarketDataProvider', () => {
     );
   });
 
-  it('connects using the session feed token, client code, and API key in the URL', async () => {
+  it('connects using the session access token, client id, and version/authType query params', async () => {
     await provider.connect();
 
     expect(sessionManager.ensureSession).toHaveBeenCalled();
     expect(wsClient.connectUrls).toHaveLength(1);
     const url = new URL(wsClient.connectUrls[0]);
-    expect(url.searchParams.get('clientCode')).toBe('CLIENT1');
-    expect(url.searchParams.get('feedToken')).toBe('feed-token-value');
-    expect(url.searchParams.get('apiKey')).toBe('api-key');
+    expect(url.searchParams.get('clientId')).toBe('CLIENT1');
+    expect(url.searchParams.get('token')).toBe('access-token-value');
+    expect(url.searchParams.get('version')).toBe('2');
+    expect(url.searchParams.get('authType')).toBe('2');
     expect(provider.isConnected()).toBe(true);
-  });
-
-  it('starts a heartbeat ping interval once connected', async () => {
-    await provider.connect();
-    expect(scheduler.pendingIntervalCount()).toBe(1);
-
-    scheduler.fireAllIntervals();
-    expect(wsClient.sentMessages).toContain('ping');
   });
 
   it('notifies connection state changes through CONNECTING -> CONNECTED', async () => {
@@ -179,65 +193,110 @@ describe('AngelOneMarketDataProvider', () => {
     expect(wsClient.sentMessages).toHaveLength(0);
   });
 
-  it('subscribing while connected sends a subscribe frame with the token list', async () => {
+  it('subscribing while connected sends a Full-packet subscribe frame with the security id list', async () => {
     await provider.connect();
     await provider.subscribe([NIFTY]);
 
     expect(wsClient.sentMessages).toHaveLength(1);
     const frame = JSON.parse(wsClient.sentMessages[0]) as {
-      action: number;
-      params: { tokenList: string[] };
+      RequestCode: number;
+      InstrumentList: { ExchangeSegment: string; SecurityId: string }[];
     };
-    expect(frame.action).toBe(1);
-    expect(frame.params.tokenList).toEqual(['TOKEN-1']);
+    expect(frame.RequestCode).toBe(21);
+    expect(frame.InstrumentList).toEqual([
+      { ExchangeSegment: 'NSE_FNO', SecurityId: '49081' },
+    ]);
   });
 
   it('unsubscribing while connected sends an unsubscribe frame', async () => {
     await provider.connect();
     await provider.subscribe([NIFTY]);
-    await provider.unsubscribe(['TOKEN-1']);
+    await provider.unsubscribe(['49081']);
 
-    const frame = JSON.parse(wsClient.sentMessages[1]) as { action: number };
-    expect(frame.action).toBe(0);
+    const frame = JSON.parse(wsClient.sentMessages[1]) as {
+      RequestCode: number;
+    };
+    expect(frame.RequestCode).toBe(22);
   });
 
-  it('receiving "pong" invokes the heartbeat handler', async () => {
+  it('receiving any well-formed binary tick frame invokes the heartbeat handler', async () => {
     const heartbeats: number[] = [];
     provider.onHeartbeat(() => heartbeats.push(1));
     await provider.connect();
+    await provider.subscribe([NIFTY]);
 
-    wsClient.simulateMessage('pong');
+    wsClient.simulateMessage(buildFullPacket(49081, 123.45));
 
     expect(heartbeats).toHaveLength(1);
   });
 
-  it('receiving a well-formed tick frame invokes the tick handler with a normalized Tick', async () => {
+  it('fires a periodic heartbeat as long as the socket stays open, even with zero ticks — Dhan has no app-level ping/pong to rely on instead', async () => {
+    const heartbeats: number[] = [];
+    provider.onHeartbeat(() => heartbeats.push(1));
+    await provider.connect();
+
+    scheduler.fireAllIntervals();
+
+    expect(heartbeats.length).toBeGreaterThan(0);
+  });
+
+  it('stops the periodic heartbeat once disconnected', async () => {
+    await provider.connect();
+    await provider.disconnect();
+
+    expect(scheduler.pendingIntervalCount()).toBe(0);
+  });
+
+  it('an OI-only packet (code 5) counts as a heartbeat but never produces a Tick — it has no real last-traded price', async () => {
+    const heartbeats: number[] = [];
+    const ticks: unknown[] = [];
+    provider.onHeartbeat(() => heartbeats.push(1));
+    provider.onTick((tick) => ticks.push(tick));
+    await provider.connect();
+    await provider.subscribe([NIFTY]);
+
+    wsClient.simulateMessage(buildOiPacket(49081, 55000));
+
+    expect(heartbeats).toHaveLength(1);
+    expect(ticks).toHaveLength(0);
+  });
+
+  it('receiving a well-formed Full-packet tick invokes the tick handler with a normalized Tick', async () => {
     const ticks: { instrumentToken: string; lastPrice: number }[] = [];
     provider.onTick((tick) => ticks.push(tick));
     await provider.connect();
     await provider.subscribe([NIFTY]);
 
-    wsClient.simulateMessage(
-      JSON.stringify({ token: 'TOKEN-1', last_traded_price: 123.45 }),
-    );
+    wsClient.simulateMessage(buildFullPacket(49081, 123.45));
 
     expect(ticks).toHaveLength(1);
     expect(ticks[0]).toEqual(
       expect.objectContaining({
-        instrumentToken: 'TOKEN-1',
-        lastPrice: 123.45,
+        instrumentToken: '49081',
+        lastPrice: expect.closeTo(123.45, 2),
       }),
     );
   });
 
-  it('silently drops a malformed tick frame', async () => {
+  it('silently drops a malformed or non-binary frame', async () => {
     const ticks: unknown[] = [];
     provider.onTick((tick) => ticks.push(tick));
     await provider.connect();
     await provider.subscribe([NIFTY]);
 
-    wsClient.simulateMessage('not json{{{');
-    wsClient.simulateMessage(JSON.stringify({ garbage: true }));
+    wsClient.simulateMessage('not binary');
+    wsClient.simulateMessage(new ArrayBuffer(2));
+
+    expect(ticks).toHaveLength(0);
+  });
+
+  it('drops a tick for a security id that was never subscribed', async () => {
+    const ticks: unknown[] = [];
+    provider.onTick((tick) => ticks.push(tick));
+    await provider.connect();
+    await provider.subscribe([NIFTY]);
+
+    wsClient.simulateMessage(buildFullPacket(999999, 1));
 
     expect(ticks).toHaveLength(0);
   });
@@ -257,9 +316,7 @@ describe('AngelOneMarketDataProvider', () => {
 
       expect(wsClient.connectUrls).toHaveLength(2);
       expect(provider.isConnected()).toBe(true);
-      expect(wsClient.sentMessages.some((m) => m.includes('TOKEN-1'))).toBe(
-        true,
-      );
+      expect(wsClient.sentMessages.some((m) => m.includes('49081'))).toBe(true);
     });
 
     it('does not reconnect on a close that happens during the initial connect attempt', async () => {
@@ -279,7 +336,7 @@ describe('AngelOneMarketDataProvider', () => {
     });
 
     it('gives up after exceeding maxRetries and settles as DISCONNECTED', async () => {
-      const limitedProvider = new AngelOneMarketDataProvider(
+      const limitedProvider = new DhanMarketDataProvider(
         createCredentialsProvider(),
         sessionManager as unknown as BrokerSessionManager,
         wsClient,

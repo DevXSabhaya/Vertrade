@@ -14,6 +14,7 @@ import { QueueMetricsService } from './metrics/queue-metrics.service';
 import { QueueItemState } from './models/queue-item-state.enum';
 import { FakeClock } from './testing/fake-clock';
 import { FakeQueueItemRepository } from './testing/fake-queue-item-repository';
+import { InstantTimerScheduler } from './testing/instant-timer-scheduler';
 import {
   buildRequest,
   buildResolvedInstrument,
@@ -96,6 +97,7 @@ describe('OrderQueueService', () => {
         subscribeInstrument: () => Promise.resolve(),
       } as unknown as MarketDataService,
       { getCurrentMode: () => 'PAPER' } as unknown as TradingModeService,
+      new InstantTimerScheduler(),
     );
     service = buildService();
   });
@@ -313,6 +315,56 @@ describe('OrderQueueService', () => {
 
     it('cleanupLocks delegates to the LockManager', () => {
       expect(service.cleanupLocks()).toBe(0);
+    });
+
+    it('pruneCompletedItems evicts an old terminal item from the in-memory map — bounds unbounded growth over a long-running process', async () => {
+      const result = await service.submitTrade(
+        buildRequest({ idempotencyKey: 'old-completed' }),
+        'r',
+      );
+      await service.drain(); // completes normally
+      expect(service.getItem(itemKeyOf(result)).state).toBe(
+        QueueItemState.COMPLETED,
+      );
+
+      clock.advanceBy(25 * 60 * 60 * 1000);
+      const removedCount = service.pruneCompletedItems(24 * 60 * 60 * 1000);
+
+      expect(removedCount).toBe(1);
+      expect(() => service.getItem(itemKeyOf(result))).toThrow(
+        QueueItemNotFoundException,
+      );
+    });
+
+    it('pruneCompletedItems never touches a still-in-flight (non-terminal) item, however old', async () => {
+      worker.pause();
+      const result = await service.submitTrade(
+        buildRequest({ idempotencyKey: 'still-queued' }),
+        'r',
+      );
+      clock.advanceBy(25 * 60 * 60 * 1000);
+
+      const removedCount = service.pruneCompletedItems(24 * 60 * 60 * 1000);
+
+      expect(removedCount).toBe(0);
+      expect(service.getItem(itemKeyOf(result)).state).toBe(
+        QueueItemState.QUEUED,
+      );
+    });
+
+    it('pruneCompletedItems leaves a recently-completed item alone', async () => {
+      const result = await service.submitTrade(
+        buildRequest({ idempotencyKey: 'recent-completed' }),
+        'r',
+      );
+      await service.drain();
+
+      const removedCount = service.pruneCompletedItems(24 * 60 * 60 * 1000);
+
+      expect(removedCount).toBe(0);
+      expect(service.getItem(itemKeyOf(result)).state).toBe(
+        QueueItemState.COMPLETED,
+      );
     });
   });
 

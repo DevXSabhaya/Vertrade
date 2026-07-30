@@ -14,7 +14,7 @@ describe('TradingModeService', () => {
   let settingsService: { get: jest.Mock; set: jest.Mock };
   let configService: {
     tradingMode: 'PAPER' | 'LIVE';
-    hasAngelOneCredentials: boolean;
+    hasDhanCredentials: boolean;
   };
   let brokerSessionManager: jest.Mocked<
     Pick<BrokerSessionManager, 'ensureSession' | 'isSessionValid'>
@@ -35,7 +35,7 @@ describe('TradingModeService', () => {
         return Promise.resolve({ key, value } as never);
       }),
     };
-    configService = { tradingMode: 'PAPER', hasAngelOneCredentials: true };
+    configService = { tradingMode: 'PAPER', hasDhanCredentials: true };
     brokerSessionManager = {
       ensureSession: jest.fn().mockResolvedValue({}),
       isSessionValid: jest.fn().mockReturnValue(true),
@@ -92,7 +92,7 @@ describe('TradingModeService', () => {
     });
 
     it('refuses to switch to LIVE when no broker credentials are configured — never silently proceeds', async () => {
-      configService.hasAngelOneCredentials = false;
+      configService.hasDhanCredentials = false;
 
       await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow(
         BusinessException,

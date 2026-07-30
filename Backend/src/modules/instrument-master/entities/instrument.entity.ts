@@ -2,7 +2,7 @@ import type { OptionType } from '../option-type.enum';
 
 /**
  * Broker-agnostic, normalized instrument shape. Nothing outside the broker
- * adapter (e.g. AngelOneInstrumentMasterProvider) ever sees a raw broker record.
+ * adapter (e.g. DhanInstrumentMasterProvider) ever sees a raw broker record.
  */
 export class Instrument {
   constructor(

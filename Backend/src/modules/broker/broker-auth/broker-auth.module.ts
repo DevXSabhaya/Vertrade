@@ -7,8 +7,8 @@ import {
 import { BrokerCredentialsProvider } from './broker-credentials.provider';
 import { BrokerTokenRepository } from './broker-token.repository';
 import { FetchBrokerHttpClient } from './fetch-broker-http-client';
-import { AngelOneBrokerAuth } from './angel-one-broker-auth';
-import { AngelOneAccountService } from './angel-one-account.service';
+import { DhanBrokerAuth } from './dhan-broker-auth';
+import { DhanAccountService } from './dhan-account.service';
 import { BrokerSessionManager } from './broker-session-manager';
 import {
   BROKER_AUTH,
@@ -29,10 +29,10 @@ import {
     BrokerCredentialsProvider,
     { provide: BROKER_TOKEN_REPOSITORY, useClass: BrokerTokenRepository },
     { provide: BROKER_HTTP_CLIENT, useClass: FetchBrokerHttpClient },
-    { provide: BROKER_AUTH, useClass: AngelOneBrokerAuth },
-    AngelOneAccountService,
+    { provide: BROKER_AUTH, useClass: DhanBrokerAuth },
+    DhanAccountService,
     BrokerSessionManager,
   ],
-  exports: [BrokerSessionManager, AngelOneAccountService],
+  exports: [BrokerSessionManager, DhanAccountService],
 })
 export class BrokerAuthModule {}

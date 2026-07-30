@@ -8,16 +8,18 @@ import type {
 /**
  * A real, generic WebSocket client built on Node's native global WebSocket
  * (stable since Node 22) — this would work against any real WS endpoint.
- * It is not exercised against Angel One's real feed in this environment (no
- * live credentials, and Phase 6 explicitly forbids opening a real connection
- * here); AngelOneMarketDataProvider is unit-tested against a fake
+ * It is not exercised against DhanHQ's real feed in this environment (no
+ * live credentials); DhanMarketDataProvider is unit-tested against a fake
  * IWebSocketClient instead. Same "real but unverified against the live
- * broker" posture as FetchBrokerHttpClient from Phase 2.
+ * broker" posture as FetchBrokerHttpClient. `binaryType` is forced to
+ * `arraybuffer` because DhanHQ's live market feed is a binary protocol —
+ * without this, Node's native WebSocket delivers binary frames as a `Blob`,
+ * which can't be synchronously parsed.
  */
 @Injectable()
 export class NativeWebSocketClient implements IWebSocketClient {
   private socket: WebSocket | null = null;
-  private messageHandler: ((data: string) => void) | null = null;
+  private messageHandler: ((data: string | ArrayBuffer) => void) | null = null;
   private openHandler: (() => void) | null = null;
   private closeHandler: ((info: WebSocketCloseInfo) => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
@@ -25,6 +27,7 @@ export class NativeWebSocketClient implements IWebSocketClient {
   connect(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(url);
+      socket.binaryType = 'arraybuffer';
       this.socket = socket;
 
       socket.addEventListener('open', () => {
@@ -32,8 +35,10 @@ export class NativeWebSocketClient implements IWebSocketClient {
         resolve();
       });
       socket.addEventListener('message', (event: MessageEvent) => {
-        const data =
-          typeof event.data === 'string' ? event.data : String(event.data);
+        const data: string | ArrayBuffer =
+          typeof event.data === 'string' || event.data instanceof ArrayBuffer
+            ? event.data
+            : String(event.data);
         this.messageHandler?.(data);
       });
       socket.addEventListener('close', (event: CloseEvent) => {
@@ -73,7 +78,7 @@ export class NativeWebSocketClient implements IWebSocketClient {
     return this.socket?.readyState === WebSocket.OPEN;
   }
 
-  onMessage(handler: (data: string) => void): void {
+  onMessage(handler: (data: string | ArrayBuffer) => void): void {
     this.messageHandler = handler;
   }
 

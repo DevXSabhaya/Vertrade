@@ -2,7 +2,7 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { BaseEvent } from '@core/event-bus/events/base.event';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
@@ -62,7 +62,7 @@ describe('ExitManager', () => {
     tradingEngineService = new TradingEngineService(
       eventBus,
       executor as unknown as PaperExecutor,
-      executor as unknown as AngelOneExecutor,
+      executor as unknown as DhanExecutor,
       clock,
     );
     extensionStore = new TradeExtensionStore(

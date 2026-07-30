@@ -16,7 +16,7 @@ export interface LiveOrderGateResult {
 }
 
 /**
- * The last line of defense before `AngelOneExecutor` ever calls the real
+ * The last line of defense before `DhanExecutor` ever calls the real
  * broker API — separate from (and in addition to) the risk-management
  * kill-switch/emergency-stop checks that already run earlier in the
  * pipeline (`RiskEvaluationService`, consulted by `TradeValidationService`
@@ -56,13 +56,13 @@ export class LiveOrderSafetyGateService {
 
   /**
    * Checked once per live entry order, immediately before
-   * `AngelOneExecutor.placeEntryOrder` calls the real broker API. Exits are
+   * `DhanExecutor.placeEntryOrder` calls the real broker API. Exits are
    * deliberately never gated here — a risk-reducing action (closing an
    * already-open live position) must never be silently blocked by a
    * missing confirmation flag or a stale health snapshot; that would turn
    * a safety mechanism into a hazard.
    *
-   * `AngelOneExecutor.placeEntryOrder` is only ever reached for a trade
+   * `DhanExecutor.placeEntryOrder` is only ever reached for a trade
    * whose own `mode` was already pinned to LIVE at creation time (see
    * `TradingEngineService.executorFor`) — so the check below is not "is
    * this deployment LIVE by default," it's "is this deployment *still*

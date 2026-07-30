@@ -24,7 +24,12 @@ export class FetchBrokerHttpClient implements IBrokerHttpClient {
       signal: AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
 
-    const body = (await response.json()) as T;
+    // A DELETE with no response body (e.g. a 204, or an empty 200) must not
+    // throw trying to JSON-parse an empty string — DhanHQ's cancel-order
+    // endpoint can return either a JSON body or an empty one depending on
+    // outcome.
+    const text = await response.text();
+    const body = (text === '' ? {} : (JSON.parse(text) as unknown)) as T;
     return { status: response.status, body };
   }
 }

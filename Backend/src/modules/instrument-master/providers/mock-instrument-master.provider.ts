@@ -37,7 +37,7 @@ const EQUITIES: readonly EquitySeed[] = [
 const INDEX_OPTIONS: readonly IndexSeed[] = [
   {
     underlying: 'SENSEX',
-    exchange: 'BSE',
+    exchange: 'BSE_FNO',
     segment: 'OPTIDX',
     strikeStep: 100,
     strikeCount: 25,
@@ -46,7 +46,7 @@ const INDEX_OPTIONS: readonly IndexSeed[] = [
   },
   {
     underlying: 'NIFTY',
-    exchange: 'NFO',
+    exchange: 'NSE_FNO',
     segment: 'OPTIDX',
     strikeStep: 50,
     strikeCount: 25,
@@ -55,7 +55,7 @@ const INDEX_OPTIONS: readonly IndexSeed[] = [
   },
   {
     underlying: 'BANKNIFTY',
-    exchange: 'NFO',
+    exchange: 'NSE_FNO',
     segment: 'OPTIDX',
     strikeStep: 100,
     // Wider than the other index ladders (35 vs 25 strikes either side of
@@ -72,8 +72,8 @@ const INDEX_OPTIONS: readonly IndexSeed[] = [
   },
   {
     underlying: 'CRUDEOIL',
-    exchange: 'MCX',
-    segment: 'OPTCOM',
+    exchange: 'MCX_COMM',
+    segment: 'OPTFUT',
     strikeStep: 100,
     strikeCount: 15,
     atmStrike: 7000,
@@ -95,9 +95,9 @@ function nextMonthlyExpiry(): Date {
  * no credentials, no network call. This is what lets `TRADING_MODE=PAPER`
  * (and `INSTRUMENT_MASTER_PROVIDER=MOCK`, the default) resolve natural
  * trading calls like "SENSEX 77200 CE" locally, since the real
- * `AngelOneInstrumentMasterProvider` requires a live broker download.
+ * `DhanInstrumentMasterProvider` requires a live broker download.
  * Selected purely by `INSTRUMENT_MASTER_PROVIDER` in `instrument-master.module.ts`,
- * mirroring `MarketDataModule`'s existing MOCK-vs-ANGEL_ONE factory pattern.
+ * mirroring `MarketDataModule`'s existing MOCK-vs-DHAN factory pattern.
  */
 @Injectable()
 export class MockInstrumentMasterProvider implements IInstrumentMasterProvider {
@@ -113,9 +113,9 @@ export class MockInstrumentMasterProvider implements IInstrumentMasterProvider {
       (equity) =>
         new Instrument(
           `MOCK-EQ-${equity.symbol}`,
-          'NSE',
-          'EQ',
-          `${equity.symbol}-EQ`,
+          'NSE_EQ',
+          'EQUITY',
+          equity.symbol,
           equity.name,
           null,
           null,

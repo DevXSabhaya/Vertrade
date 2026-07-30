@@ -26,6 +26,17 @@ import { RiskPolicyService } from './risk-policy.service';
 @Injectable()
 export class DailyRiskStateService implements OnModuleInit {
   private cached: DailyRiskState | null = null;
+  /**
+   * Every `recordTradeOutcome` call is chained onto this single promise so
+   * two calls can never interleave. Without this, two `TradeCompletedEvent`s
+   * firing close together (very plausible — e.g. two different trades on
+   * two instruments both hitting their exit condition on the same tick
+   * batch) could both `await this.getState()` and read the same
+   * not-yet-updated state before either writes back, silently losing one
+   * trade's PnL/loss-count update — a real "lost update" race that could
+   * make `maxConsecutiveLosses` never trip when it should.
+   */
+  private updateChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     @Inject(DAILY_RISK_STATE_REPOSITORY)
@@ -68,6 +79,19 @@ export class DailyRiskStateService implements OnModuleInit {
   }
 
   async recordTradeOutcome(realizedPnl: number): Promise<DailyRiskState> {
+    const result = this.updateChain.then(() =>
+      this.applyTradeOutcome(realizedPnl),
+    );
+    // Swallow here so a failed update doesn't permanently poison the chain
+    // for every subsequent call — the real rejection still propagates to
+    // this method's own caller via the returned (unswallowed) `result`.
+    this.updateChain = result.catch(() => undefined);
+    return result;
+  }
+
+  private async applyTradeOutcome(
+    realizedPnl: number,
+  ): Promise<DailyRiskState> {
     const state = await this.getState();
     const wasLoss = realizedPnl < 0;
     const consecutiveLosses = wasLoss ? state.consecutiveLosses + 1 : 0;

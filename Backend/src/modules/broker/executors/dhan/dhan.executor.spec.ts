@@ -1,9 +1,10 @@
-import { AngelOneExecutor } from './angel-one.executor';
+import { DhanExecutor } from './dhan.executor';
 import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { BrokerSession } from '@modules/broker/broker-auth/entities/broker-session.entity';
 import { BrokerToken } from '@modules/broker/broker-auth/value-objects/broker-token.vo';
 import { BrokerCredentials } from '@modules/broker/broker-auth/value-objects/broker-credentials.vo';
+import type { ConfigService } from '@core/config/config.service';
 import type {
   BrokerHttpRequest,
   IBrokerHttpClient,
@@ -18,142 +19,111 @@ import type { LiveOrderSafetyGateService } from '../live-order-safety-gate.servi
 import { OrderNotFoundException } from '../exceptions/order-not-found.exception';
 import { OrderPlacementException } from '../exceptions/order-placement.exception';
 import { BrokerOrderApiException } from '../exceptions/broker-order-api.exception';
-import {
-  ANGEL_ONE_CANCEL_ORDER_PATH,
-  ANGEL_ONE_MODIFY_ORDER_PATH,
-  ANGEL_ONE_ORDER_BOOK_PATH,
-  ANGEL_ONE_PLACE_ORDER_PATH,
-} from './angel-one-order.constants';
+import { DHAN_ORDERS_PATH } from './dhan-order.constants';
 import type {
-  AngelOneCancelOrderRequestBody,
-  AngelOneModifyOrderRequestBody,
-  AngelOneOrderBookResponseBody,
-  AngelOneOrderMutationResponseBody,
-  AngelOnePlaceOrderRequestBody,
-} from './angel-one-order-raw.dto';
+  DhanModifyOrderRequestBody,
+  DhanPlaceOrderRequestBody,
+} from './dhan-order-raw.dto';
 import { describeOrderExecutorContract } from '../contract/order-executor.contract';
 
 interface FakeOrderRecord {
-  tradingsymbol: string;
-  symboltoken: string;
-  exchange: string;
-  quantity: string;
-  price: string;
+  tradingSymbol: string;
+  securityId: string;
+  exchangeSegment: string;
+  quantity: number;
+  price: number;
   status: string;
-  filledshares: string;
-  averageprice: string;
+  filledQty: number;
+  averageTradedPrice: number;
 }
 
-/** A minimal, fully in-memory fake Angel One order book — no real network ever involved. */
-class FakeAngelOneServer {
+const REST_BASE_URL = 'https://api.dhan.invalid/v2';
+
+/** A minimal, fully in-memory fake Dhan order book — no real network ever involved. */
+class FakeDhanServer {
   private readonly orders = new Map<string, FakeOrderRecord>();
   private sequence = 0;
-  nextPlacementStatus: 'open' | 'complete' = 'complete';
+  nextPlacementStatus: 'TRANSIT' | 'TRADED' = 'TRADED';
   rejectNextPlacement = false;
   sessionExpiredOnce = false;
 
-  placeOrder(
-    body: AngelOnePlaceOrderRequestBody,
-  ): AngelOneOrderMutationResponseBody {
+  placeOrder(body: DhanPlaceOrderRequestBody) {
     if (this.rejectNextPlacement) {
       this.rejectNextPlacement = false;
-      return {
-        status: false,
-        message: 'Rejected by fake broker',
-        errorcode: 'AB1000',
-        data: null,
-      };
+      this.sequence += 1;
+      const orderId = `DH-${this.sequence}`;
+      this.orders.set(orderId, {
+        tradingSymbol: 'REJECTED',
+        securityId: body.securityId,
+        exchangeSegment: body.exchangeSegment,
+        quantity: body.quantity,
+        price: body.price,
+        status: 'REJECTED',
+        filledQty: 0,
+        averageTradedPrice: 0,
+      });
+      return { orderId, orderStatus: 'REJECTED' };
     }
 
     this.sequence += 1;
-    const orderid = `AO-${this.sequence}`;
+    const orderId = `DH-${this.sequence}`;
     const status = this.nextPlacementStatus;
-    this.nextPlacementStatus = 'complete';
-    const filled = status === 'complete';
+    this.nextPlacementStatus = 'TRADED';
+    const filled = status === 'TRADED';
 
-    this.orders.set(orderid, {
-      tradingsymbol: body.tradingsymbol,
-      symboltoken: body.symboltoken,
-      exchange: body.exchange,
+    this.orders.set(orderId, {
+      tradingSymbol: 'NIFTY24500CE',
+      securityId: body.securityId,
+      exchangeSegment: body.exchangeSegment,
       quantity: body.quantity,
       price: body.price,
       status,
-      filledshares: filled ? body.quantity : '0',
-      averageprice: filled ? (body.price !== '0' ? body.price : '100') : '0',
+      filledQty: filled ? body.quantity : 0,
+      averageTradedPrice: filled ? (body.price !== 0 ? body.price : 100) : 0,
     });
 
-    return {
-      status: true,
-      message: 'SUCCESS',
-      errorcode: '',
-      data: { script: body.tradingsymbol, orderid },
-    };
+    return { orderId, orderStatus: status };
   }
 
-  modifyOrder(
-    body: AngelOneModifyOrderRequestBody,
-  ): AngelOneOrderMutationResponseBody {
-    const order = this.orders.get(body.orderid);
+  modifyOrder(orderId: string, body: DhanModifyOrderRequestBody) {
+    const order = this.orders.get(orderId);
     if (!order) {
-      return {
-        status: false,
-        message: 'Order not found',
-        errorcode: 'AB2000',
-        data: null,
-      };
+      return { orderId, orderStatus: 'REJECTED' };
     }
     order.quantity = body.quantity;
     order.price = body.price;
-    return {
-      status: true,
-      message: 'SUCCESS',
-      errorcode: '',
-      data: { script: order.tradingsymbol, orderid: body.orderid },
-    };
+    return { orderId, orderStatus: order.status };
   }
 
-  cancelOrder(
-    body: AngelOneCancelOrderRequestBody,
-  ): AngelOneOrderMutationResponseBody {
-    const order = this.orders.get(body.orderid);
+  cancelOrder(orderId: string) {
+    const order = this.orders.get(orderId);
     if (!order) {
-      return {
-        status: false,
-        message: 'Order not found',
-        errorcode: 'AB2000',
-        data: null,
-      };
+      return { orderId, orderStatus: 'REJECTED' };
     }
-    order.status = 'cancelled';
-    return {
-      status: true,
-      message: 'SUCCESS',
-      errorcode: '',
-      data: { script: order.tradingsymbol, orderid: body.orderid },
-    };
+    order.status = 'CANCELLED';
+    return { orderId, orderStatus: 'CANCELLED' };
   }
 
-  getOrderBook(): AngelOneOrderBookResponseBody {
-    const data = Array.from(this.orders.entries()).map(([orderid, order]) => ({
-      orderid,
-      status: order.status,
-      tradingsymbol: order.tradingsymbol,
-      symboltoken: order.symboltoken,
-      exchange: order.exchange,
+  getOrderBook() {
+    return Array.from(this.orders.entries()).map(([orderId, order]) => ({
+      orderId,
+      orderStatus: order.status,
+      tradingSymbol: order.tradingSymbol,
+      securityId: order.securityId,
+      exchangeSegment: order.exchangeSegment,
       quantity: order.quantity,
       price: order.price,
-      filledshares: order.filledshares,
-      averageprice: order.averageprice,
-      updatetime: '2026-01-01 10:00:00',
+      filledQty: order.filledQty,
+      averageTradedPrice: order.averageTradedPrice,
+      updateTime: '2026-01-01 10:00:00',
     }));
-    return { status: true, message: 'SUCCESS', errorcode: '', data };
   }
 }
 
 function createFakeSession(): BrokerSession {
   return new BrokerSession(
     'CLIENT1',
-    new BrokerToken('jwt-value', 'refresh-value', 'feed-value'),
+    new BrokerToken('access-token-value'),
     new Date(),
     new Date(Date.now() + 3_600_000),
   );
@@ -162,17 +132,16 @@ function createFakeSession(): BrokerSession {
 function createCredentialsProvider(): BrokerCredentialsProvider {
   return {
     getCredentials: () =>
-      new BrokerCredentials(
-        'api-key',
-        'CLIENT1',
-        'password',
-        'JBSWY3DPEHPK3PXP',
-      ),
+      new BrokerCredentials('CLIENT1', 'api-key', 'access-token-value'),
   } as unknown as BrokerCredentialsProvider;
 }
 
+function createConfigService(): ConfigService {
+  return { dhanRestUrl: REST_BASE_URL } as unknown as ConfigService;
+}
+
 function createHttpClient(
-  server: FakeAngelOneServer,
+  server: FakeDhanServer,
 ): jest.Mocked<IBrokerHttpClient> {
   return {
     request: jest.fn((req: BrokerHttpRequest) => {
@@ -180,43 +149,42 @@ function createHttpClient(
         server.sessionExpiredOnce = false;
         return {
           status: 401,
-          body: {
-            status: false,
-            message: 'Session expired',
-            errorcode: 'AB3000',
-            data: null,
-          },
+          body: { errorCode: 'DH-901', errorMessage: 'Invalid Access Token' },
         };
       }
-      if (req.url.endsWith(ANGEL_ONE_PLACE_ORDER_PATH)) {
+
+      const ordersUrl = `${REST_BASE_URL}${DHAN_ORDERS_PATH}`;
+      if (req.url === ordersUrl && req.method === 'POST') {
         return {
           status: 200,
-          body: server.placeOrder(req.body as AngelOnePlaceOrderRequestBody),
+          body: server.placeOrder(req.body as DhanPlaceOrderRequestBody),
         };
       }
-      if (req.url.endsWith(ANGEL_ONE_MODIFY_ORDER_PATH)) {
-        return {
-          status: 200,
-          body: server.modifyOrder(req.body as AngelOneModifyOrderRequestBody),
-        };
-      }
-      if (req.url.endsWith(ANGEL_ONE_CANCEL_ORDER_PATH)) {
-        return {
-          status: 200,
-          body: server.cancelOrder(req.body as AngelOneCancelOrderRequestBody),
-        };
-      }
-      if (req.url.endsWith(ANGEL_ONE_ORDER_BOOK_PATH)) {
+      if (req.url === ordersUrl && req.method === 'GET') {
         return { status: 200, body: server.getOrderBook() };
       }
-      throw new Error(`Unexpected URL in test: ${req.url}`);
+      if (req.url.startsWith(`${ordersUrl}/`) && req.method === 'PUT') {
+        const orderId = req.url.slice(`${ordersUrl}/`.length);
+        return {
+          status: 200,
+          body: server.modifyOrder(
+            orderId,
+            req.body as DhanModifyOrderRequestBody,
+          ),
+        };
+      }
+      if (req.url.startsWith(`${ordersUrl}/`) && req.method === 'DELETE') {
+        const orderId = req.url.slice(`${ordersUrl}/`.length);
+        return { status: 200, body: server.cancelOrder(orderId) };
+      }
+      throw new Error(`Unexpected URL in test: ${req.method} ${req.url}`);
     }),
   } as unknown as jest.Mocked<IBrokerHttpClient>;
 }
 
 function entryRequest(): OrderRequest {
   return new OrderRequest(
-    'NFO',
+    'NSE_FNO',
     'NIFTY24500CE',
     '12345',
     OrderSide.BUY,
@@ -225,7 +193,7 @@ function entryRequest(): OrderRequest {
   );
 }
 
-/** Always-allow stub — these tests exercise Angel One API mechanics, not the safety gate itself (see live-order-safety-gate.service.spec.ts for that). */
+/** Always-allow stub — these tests exercise Dhan API mechanics, not the safety gate itself (see live-order-safety-gate.service.spec.ts for that). */
 function createAlwaysAllowGate(): LiveOrderSafetyGateService {
   return {
     checkEntryAllowed: jest
@@ -234,18 +202,19 @@ function createAlwaysAllowGate(): LiveOrderSafetyGateService {
   } as unknown as LiveOrderSafetyGateService;
 }
 
-describeOrderExecutorContract('AngelOneExecutor', () => {
-  const server = new FakeAngelOneServer();
+describeOrderExecutorContract('DhanExecutor', () => {
+  const server = new FakeDhanServer();
   const httpClient = createHttpClient(server);
   const sessionManager = {
     ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
     refresh: jest.fn().mockResolvedValue(createFakeSession()),
   } as unknown as BrokerSessionManager;
 
-  const executor = new AngelOneExecutor(
+  const executor = new DhanExecutor(
     createCredentialsProvider(),
     sessionManager,
     createAlwaysAllowGate(),
+    createConfigService(),
     httpClient,
   );
 
@@ -253,31 +222,32 @@ describeOrderExecutorContract('AngelOneExecutor', () => {
     executor,
     placeFillableOrder: () => executor.placeEntryOrder(entryRequest()),
     placeOpenOrder: () => {
-      server.nextPlacementStatus = 'open';
+      server.nextPlacementStatus = 'TRANSIT';
       return executor.placeEntryOrder(entryRequest());
     },
   };
 });
 
-describe('AngelOneExecutor (broker-specific behavior)', () => {
-  let server: FakeAngelOneServer;
+describe('DhanExecutor (broker-specific behavior)', () => {
+  let server: FakeDhanServer;
   let httpClient: jest.Mocked<IBrokerHttpClient>;
   let sessionManager: jest.Mocked<
     Pick<BrokerSessionManager, 'ensureSession' | 'refresh'>
   >;
-  let executor: AngelOneExecutor;
+  let executor: DhanExecutor;
 
   beforeEach(() => {
-    server = new FakeAngelOneServer();
+    server = new FakeDhanServer();
     httpClient = createHttpClient(server);
     sessionManager = {
       ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     };
-    executor = new AngelOneExecutor(
+    executor = new DhanExecutor(
       createCredentialsProvider(),
       sessionManager as unknown as BrokerSessionManager,
       createAlwaysAllowGate(),
+      createConfigService(),
       httpClient,
     );
   });
@@ -287,20 +257,19 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
     expect(httpClient.request).toHaveBeenCalled();
   });
 
-  it('sends the required Angel One headers including the session JWT', async () => {
+  it('sends the required Dhan headers including the session access token', async () => {
     await executor.placeEntryOrder(entryRequest());
 
     expect(httpClient.request).toHaveBeenCalledWith(
       expect.objectContaining({
         headers: expect.objectContaining({
-          'X-PrivateKey': 'api-key',
-          Authorization: 'Bearer jwt-value',
+          'access-token': 'access-token-value',
         }),
       }),
     );
   });
 
-  it('throws OrderPlacementException when Angel One rejects the order', async () => {
+  it('throws OrderPlacementException when Dhan rejects the order', async () => {
     server.rejectNextPlacement = true;
     await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
       OrderPlacementException,
@@ -364,7 +333,7 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
       if (calls === 1) {
         return Promise.resolve({
           status: 503,
-          body: { status: false, message: 'Service unavailable' },
+          body: { errorCode: 'DH-500', errorMessage: 'Service unavailable' },
         });
       }
       return Promise.resolve(realRequest!(req));
@@ -396,7 +365,7 @@ describe('AngelOneExecutor (broker-specific behavior)', () => {
   });
 });
 
-describe('AngelOneExecutor + LiveOrderSafetyGateService wiring', () => {
+describe('DhanExecutor + LiveOrderSafetyGateService wiring', () => {
   function blockingGate(reason: string): LiveOrderSafetyGateService {
     return {
       checkEntryAllowed: jest
@@ -406,16 +375,17 @@ describe('AngelOneExecutor + LiveOrderSafetyGateService wiring', () => {
   }
 
   it("placeEntryOrder is rejected with the gate's reason when the safety gate blocks it, and never calls the broker", async () => {
-    const server = new FakeAngelOneServer();
+    const server = new FakeDhanServer();
     const httpClient = createHttpClient(server);
     const sessionManager = {
       ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     } as unknown as BrokerSessionManager;
-    const executor = new AngelOneExecutor(
+    const executor = new DhanExecutor(
       createCredentialsProvider(),
       sessionManager,
       blockingGate('broker health is DEGRADED'),
+      createConfigService(),
       httpClient,
     );
 
@@ -426,26 +396,28 @@ describe('AngelOneExecutor + LiveOrderSafetyGateService wiring', () => {
   });
 
   it('exitPosition still succeeds even when the safety gate would block a new entry — risk-reducing actions are never gated', async () => {
-    const server = new FakeAngelOneServer();
+    const server = new FakeDhanServer();
     const httpClient = createHttpClient(server);
     const sessionManager = {
       ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     } as unknown as BrokerSessionManager;
     // First, place an entry with an always-allow gate so there's something to exit.
-    const setupExecutor = new AngelOneExecutor(
+    const setupExecutor = new DhanExecutor(
       createCredentialsProvider(),
       sessionManager,
       createAlwaysAllowGate(),
+      createConfigService(),
       httpClient,
     );
     const placed = await setupExecutor.placeEntryOrder(entryRequest());
 
     // Now exit using an executor instance wired to a gate that blocks every entry.
-    const blockingExecutor = new AngelOneExecutor(
+    const blockingExecutor = new DhanExecutor(
       createCredentialsProvider(),
       sessionManager,
       blockingGate('LIVE_TRADING_ENABLED is off'),
+      createConfigService(),
       httpClient,
     );
 

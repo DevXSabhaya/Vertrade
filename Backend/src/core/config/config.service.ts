@@ -24,25 +24,34 @@ export class ConfigService {
     return this.nestConfigService.get('MONGODB_URI', { infer: true });
   }
 
-  get angelOneApiKey(): string {
-    return this.nestConfigService.get('ANGEL_ONE_API_KEY', { infer: true });
+  get dhanClientId(): string {
+    return this.nestConfigService.get('DHAN_CLIENT_ID', { infer: true });
   }
 
-  get angelOneClientCode(): string {
-    return this.nestConfigService.get('ANGEL_ONE_CLIENT_CODE', { infer: true });
+  /**
+   * Never required. Per DhanHQ's official v2 authentication docs
+   * (https://dhanhq.co/docs/v2/authentication/), `app_id`/`app_secret` are
+   * only used by the OAuth "consent" flow that *issues* an access token for
+   * a partner app — no REST/WebSocket call ever sends this value, and
+   * `env.validation.ts` deliberately does not require it even when
+   * TRADING_MODE=LIVE (the operator-generated-web-console-token flow this
+   * app uses needs only `dhanClientId` + `access-token`). Reserved purely
+   * for a future OAuth-consent-flow implementation.
+   */
+  get dhanApiKey(): string {
+    return this.nestConfigService.get('DHAN_API_KEY', { infer: true });
   }
 
-  get angelOnePassword(): string {
-    return this.nestConfigService.get('ANGEL_ONE_PASSWORD', { infer: true });
+  get dhanAccessToken(): string {
+    return this.nestConfigService.get('DHAN_ACCESS_TOKEN', { infer: true });
   }
 
-  get angelOneTotpSecret(): string {
-    return this.nestConfigService.get('ANGEL_ONE_TOTP_SECRET', { infer: true });
+  get dhanRestUrl(): string {
+    return this.nestConfigService.get('DHAN_REST_URL', { infer: true });
   }
 
-  /** Reserved for future Angel One request-signing/checksum support — not yet consumed by any broker call. Only required when TRADING_MODE=LIVE. */
-  get angelOneApiSecret(): string {
-    return this.nestConfigService.get('ANGEL_ONE_API_SECRET', { infer: true });
+  get dhanWsUrl(): string {
+    return this.nestConfigService.get('DHAN_WS_URL', { infer: true });
   }
 
   get tokenEncryptionKey(): string {
@@ -70,12 +79,9 @@ export class ConfigService {
    * would eventually fail anyway, but this catches the common case fast
    * without an unnecessary network round trip.
    */
-  get hasAngelOneCredentials(): boolean {
+  get hasDhanCredentials(): boolean {
     return (
-      this.angelOneApiKey.trim() !== '' &&
-      this.angelOneClientCode.trim() !== '' &&
-      this.angelOnePassword.trim() !== '' &&
-      this.angelOneTotpSecret.trim() !== ''
+      this.dhanClientId.trim() !== '' && this.dhanAccessToken.trim() !== ''
     );
   }
 

@@ -12,7 +12,7 @@ import type { IInstrumentMasterProvider } from '../src/modules/instrument-master
 
 /**
  * Proves the Phase 3 pipeline end-to-end against real MongoDB WITHOUT ever
- * calling the real Angel One instrument-master endpoint: the broker provider
+ * calling the real Dhan instrument-master endpoint: the broker provider
  * is overridden with an in-memory stub, while InstrumentMasterService,
  * InstrumentCache, the Mongo backup repository, InstrumentResolverService,
  * and the Event Bus / audit log pipeline are all real.
@@ -39,9 +39,9 @@ describe('Instrument master pipeline (e2e)', () => {
     ),
     new Instrument(
       'E2E2',
-      'NSE',
-      'EQ',
-      'RELIANCE-EQ',
+      'NSE_EQ',
+      'EQUITY',
+      'RELIANCE',
       'RELIANCE',
       null,
       null,

@@ -4,7 +4,7 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
 import { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import { selectOrderExecutor } from '@modules/broker/executors/select-order-executor.util';
 import type { IOrderExecutor } from '@modules/broker/executors/order-executor.interface';
 import { OrderRequest } from '@modules/broker/executors/models/order-request.model';
@@ -15,6 +15,7 @@ import type { OrderResponse } from '@modules/broker/executors/models/order-respo
 import { Trade } from './domain/trade.aggregate';
 import { TradeDirection } from './domain/trade-direction.enum';
 import { TradeState } from './domain/trade-state.enum';
+import { TradeStateTransitions } from './domain/trade-state-transitions';
 import type { CreateTradeParams } from './domain/create-trade.params';
 import type { TradeSnapshot } from './domain/trade-snapshot';
 import { MarketPriceUpdatedEvent } from './events/market-price-updated.event';
@@ -42,7 +43,7 @@ export class TradingEngineService {
   constructor(
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
     private readonly paperExecutor: PaperExecutor,
-    private readonly angelOneExecutor: AngelOneExecutor,
+    private readonly dhanExecutor: DhanExecutor,
     @Inject(CLOCK) private readonly clock: IClock,
   ) {
     this.eventBus.subscribe<MarketPriceUpdatedEvent>(
@@ -70,6 +71,38 @@ export class TradingEngineService {
 
   hasTrade(tradeId: string): boolean {
     return this.trades.has(tradeId);
+  }
+
+  /**
+   * Evicts terminal (COMPLETED/CANCELLED/REJECTED/FAILED/ERROR) trades from
+   * the in-memory `trades` map once they've sat there for longer than
+   * `maxAgeMs`. Without this, `trades` grows without bound for the lifetime
+   * of the process — every trade this deployment ever creates adds one
+   * entry that nothing previously ever removed. Safe: `TradeLifecycleService`
+   * durably archives a full `TradeRecord` to `TradeHistoryRepository` the
+   * moment a trade goes terminal (see its own `archive()`), so a pruned
+   * trade's data is never lost — `GET /trades/history` and
+   * `PositionManager.getPosition()`'s history fallback both still serve it.
+   * An ACTIVE/WAITING_ENTRY/pending trade is never touched, regardless of
+   * age — only a genuinely terminal one.
+   */
+  pruneCompletedTrades(maxAgeMs: number): number {
+    const now = this.clock.now().getTime();
+    let removedCount = 0;
+
+    for (const [id, trade] of this.trades) {
+      const snapshot = trade.toSnapshot();
+      if (!TradeStateTransitions.isTerminal(snapshot.state)) {
+        continue;
+      }
+      const ageMs = now - new Date(snapshot.updatedAt).getTime();
+      if (ageMs > maxAgeMs) {
+        this.trades.delete(id);
+        removedCount += 1;
+      }
+    }
+
+    return removedCount;
   }
 
   /**
@@ -298,7 +331,7 @@ export class TradingEngineService {
     return selectOrderExecutor(
       { tradingMode: trade.mode },
       this.paperExecutor,
-      this.angelOneExecutor,
+      this.dhanExecutor,
     );
   }
 

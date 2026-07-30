@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import type {
   BrokerHttpRequest,
@@ -6,11 +7,7 @@ import type {
 import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import type { BrokerSession } from '@modules/broker/broker-auth/entities/broker-session.entity';
-import {
-  getLocalIp,
-  getMacAddress,
-  getPublicIp,
-} from '@modules/broker/broker-auth/utils/client-network-info.util';
+import { ConfigService } from '@core/config/config.service';
 import type { IOrderExecutor } from '../order-executor.interface';
 import { LiveOrderSafetyGateService } from '../live-order-safety-gate.service';
 import { OrderRequest } from '../models/order-request.model';
@@ -25,43 +22,33 @@ import { OrderModificationException } from '../exceptions/order-modification.exc
 import { OrderCancellationException } from '../exceptions/order-cancellation.exception';
 import { OrderNotFoundException } from '../exceptions/order-not-found.exception';
 import { BrokerOrderApiException } from '../exceptions/broker-order-api.exception';
-import { ORDER_HTTP_CLIENT } from './angel-one-executor.constants';
+import { ORDER_HTTP_CLIENT } from './dhan-executor.constants';
+import { DHAN_ORDERS_PATH } from './dhan-order.constants';
 import {
-  ANGEL_ONE_BASE_URL,
-  ANGEL_ONE_CANCEL_ORDER_PATH,
-  ANGEL_ONE_MODIFY_ORDER_PATH,
-  ANGEL_ONE_ORDER_BOOK_PATH,
-  ANGEL_ONE_PLACE_ORDER_PATH,
-} from './angel-one-order.constants';
-import {
-  buildCancelOrderRequestBody,
   buildModifyOrderRequestBody,
   buildPlaceOrderRequestBody,
   mapOrderBookEntryToResponse,
-} from './angel-one-order.mapper';
-import type {
-  AngelOneOrderBookEntry,
-  AngelOneOrderBookResponseBody,
-  AngelOneOrderMutationResponseBody,
-} from './angel-one-order-raw.dto';
+} from './dhan-order.mapper';
+import type { DhanOrderBookEntry } from './dhan-order-raw.dto';
 import {
-  isAngelOneOrderBookResponseBody,
-  isAngelOneOrderMutationResponseBody,
-} from './angel-one-order-raw.dto';
+  isDhanOrderBookResponseBody,
+  isDhanOrderMutationResponseBody,
+} from './dhan-order-raw.dto';
 
 /**
- * Production-shaped Angel One SmartAPI order executor. Endpoint paths and
- * request/response field names follow SmartAPI's publicly documented order
- * contract — not exercised against the real API in this environment (no real
- * broker calls in automated tests, no live credentials). Verify against a
- * real/sandbox account before enabling Live trading, same caveat as the
- * broker-auth and instrument-master Angel One adapters.
+ * Production-shaped DhanHQ v2 order executor. Endpoint paths and
+ * request/response field names follow DhanHQ's publicly documented order
+ * contract (https://dhanhq.co/docs/v2/orders/) — not exercised against the
+ * real API in this environment (no real broker calls in automated tests, no
+ * live credentials). Verify against a real/sandbox account before enabling
+ * Live trading, same caveat as the broker-auth and instrument-master Dhan
+ * adapters.
  */
 @Injectable()
-export class AngelOneExecutor implements IOrderExecutor {
+export class DhanExecutor implements IOrderExecutor {
   /**
-   * Angel One's order book has no concept of our domain-level EXITED status —
-   * an exited entry order still just reports as "complete". This set is the
+   * Dhan's order book has no concept of our domain-level EXITED status — an
+   * exited entry order still just reports as "TRADED". This set is the
    * minimal local bookkeeping needed to layer that domain concept on top of
    * the broker's own order book, which remains the source of truth for
    * everything else (quantity, price, symbol details for modify/cancel).
@@ -72,6 +59,7 @@ export class AngelOneExecutor implements IOrderExecutor {
     private readonly credentialsProvider: BrokerCredentialsProvider,
     private readonly sessionManager: BrokerSessionManager,
     private readonly liveOrderSafetyGate: LiveOrderSafetyGateService,
+    private readonly configService: ConfigService,
     @Inject(ORDER_HTTP_CLIENT) private readonly httpClient: IBrokerHttpClient,
   ) {}
 
@@ -95,20 +83,25 @@ export class AngelOneExecutor implements IOrderExecutor {
   }
 
   private async submitOrder(request: OrderRequest): Promise<OrderResponse> {
-    const body = buildPlaceOrderRequestBody(request);
-    const responseBody = await this.request<AngelOneOrderMutationResponseBody>(
-      ANGEL_ONE_PLACE_ORDER_PATH,
+    const body = buildPlaceOrderRequestBody(
+      request,
+      this.credentialsProvider.getCredentials().clientId,
+      randomUUID(),
+    );
+    const responseBody = await this.request(
+      DHAN_ORDERS_PATH,
       body,
-      isAngelOneOrderMutationResponseBody,
+      isDhanOrderMutationResponseBody,
+      'POST',
     );
 
-    if (!responseBody.status || !responseBody.data) {
+    if (responseBody.orderStatus === 'REJECTED') {
       throw new OrderPlacementException(
-        responseBody.message || 'Angel One rejected the order placement',
+        `Dhan rejected the order placement (orderId=${responseBody.orderId})`,
       );
     }
 
-    return this.getOrderStatus(responseBody.data.orderid);
+    return this.getOrderStatus(responseBody.orderId);
   }
 
   async modifyOrder(
@@ -116,19 +109,24 @@ export class AngelOneExecutor implements IOrderExecutor {
     changes: OrderModification,
   ): Promise<OrderResponse> {
     const entry = await this.findOrderBookEntry(brokerOrderId);
-    const body = buildModifyOrderRequestBody(entry, changes);
-
-    const responseBody = await this.request<AngelOneOrderMutationResponseBody>(
-      ANGEL_ONE_MODIFY_ORDER_PATH,
-      body,
-      isAngelOneOrderMutationResponseBody,
+    const body = buildModifyOrderRequestBody(
+      entry,
+      changes,
+      this.credentialsProvider.getCredentials().clientId,
     );
 
-    if (!responseBody.status) {
+    await this.request(
+      `${DHAN_ORDERS_PATH}/${brokerOrderId}`,
+      body,
+      isDhanOrderMutationResponseBody,
+      'PUT',
+    ).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown transport error';
       throw new OrderModificationException(
-        responseBody.message || `Failed to modify order ${brokerOrderId}`,
+        `Failed to modify order ${brokerOrderId}: ${message}`,
       );
-    }
+    });
 
     return this.getOrderStatus(brokerOrderId);
   }
@@ -136,7 +134,7 @@ export class AngelOneExecutor implements IOrderExecutor {
   async cancelOrder(brokerOrderId: string): Promise<OrderResponse> {
     // Check current status first: an unknown id fails with OrderNotFoundException,
     // and an already-terminal order (filled/cancelled/rejected/exited) is
-    // rejected locally rather than relying on Angel One's cancel endpoint to
+    // rejected locally rather than relying on Dhan's cancel endpoint to
     // enforce that business rule consistently.
     const currentStatus = await this.getOrderStatus(brokerOrderId);
     if (
@@ -148,18 +146,18 @@ export class AngelOneExecutor implements IOrderExecutor {
       );
     }
 
-    const body = buildCancelOrderRequestBody(brokerOrderId);
-    const responseBody = await this.request<AngelOneOrderMutationResponseBody>(
-      ANGEL_ONE_CANCEL_ORDER_PATH,
-      body,
-      isAngelOneOrderMutationResponseBody,
-    );
-
-    if (!responseBody.status) {
+    await this.request(
+      `${DHAN_ORDERS_PATH}/${brokerOrderId}`,
+      undefined,
+      isDhanOrderMutationResponseBody,
+      'DELETE',
+    ).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown transport error';
       throw new OrderCancellationException(
-        responseBody.message || `Failed to cancel order ${brokerOrderId}`,
+        `Failed to cancel order ${brokerOrderId}: ${message}`,
       );
-    }
+    });
 
     return this.getOrderStatus(brokerOrderId);
   }
@@ -169,7 +167,7 @@ export class AngelOneExecutor implements IOrderExecutor {
     exitRequest: ExitRequest,
   ): Promise<OrderResponse> {
     const entry = await this.findOrderBookEntry(brokerOrderId);
-    const filledQuantity = Number(entry.filledshares);
+    const filledQuantity = entry.filledQty;
 
     if (!Number.isFinite(filledQuantity) || filledQuantity <= 0) {
       throw new OrderPlacementException(
@@ -183,9 +181,9 @@ export class AngelOneExecutor implements IOrderExecutor {
     }
 
     const exitOrderRequest = new OrderRequest(
-      entry.exchange,
-      entry.tradingsymbol,
-      entry.symboltoken,
+      entry.exchangeSegment,
+      entry.tradingSymbol,
+      entry.securityId,
       // Every entry order this executor places is a BUY (long options), so
       // exiting it is always the opposite side, SELL.
       OrderSide.SELL,
@@ -221,26 +219,20 @@ export class AngelOneExecutor implements IOrderExecutor {
 
   private async findOrderBookEntry(
     brokerOrderId: string,
-  ): Promise<AngelOneOrderBookEntry> {
-    const responseBody = await this.request<AngelOneOrderBookResponseBody>(
-      ANGEL_ONE_ORDER_BOOK_PATH,
+  ): Promise<DhanOrderBookEntry> {
+    const entries = await this.request(
+      DHAN_ORDERS_PATH,
       undefined,
-      isAngelOneOrderBookResponseBody,
+      isDhanOrderBookResponseBody,
       'GET',
     );
 
-    if (!responseBody.status || !responseBody.data) {
-      throw new BrokerOrderApiException(
-        responseBody.message || 'Failed to fetch the Angel One order book',
-      );
-    }
-
-    const entry = responseBody.data.find(
-      (candidate) => candidate.orderid === brokerOrderId,
+    const entry = entries.find(
+      (candidate) => candidate.orderId === brokerOrderId,
     );
     if (!entry) {
       throw new OrderNotFoundException(
-        `No Angel One order found with id ${brokerOrderId}`,
+        `No Dhan order found with id ${brokerOrderId}`,
       );
     }
     return entry;
@@ -250,7 +242,7 @@ export class AngelOneExecutor implements IOrderExecutor {
     path: string,
     body: unknown,
     isValidResponse: (value: unknown) => value is T,
-    method: 'GET' | 'POST' = 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   ): Promise<T> {
     const session = await this.sessionManager.ensureSession();
     return this.performRequest<T>(
@@ -267,29 +259,24 @@ export class AngelOneExecutor implements IOrderExecutor {
     path: string,
     body: unknown,
     isValidResponse: (value: unknown) => value is T,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     session: BrokerSession,
     isRetry: boolean,
   ): Promise<T> {
-    const credentials = this.credentialsProvider.getCredentials();
     const httpRequest: BrokerHttpRequest = {
       method,
-      url: `${ANGEL_ONE_BASE_URL}${path}`,
-      headers: this.buildHeaders(
-        credentials.apiKey,
-        session.token.getJwtToken(),
-      ),
+      url: `${this.configService.dhanRestUrl}${path}`,
+      headers: this.buildHeaders(session.token.getAccessToken()),
       body,
     };
 
     const response = await this.safeSend<T>(httpRequest);
 
-    if (!isValidResponse(response.body)) {
-      throw new BrokerOrderApiException(
-        `Unexpected response shape from Angel One order API at ${path}`,
-      );
-    }
-
+    // Checked before shape validation: an expired-session error body (e.g.
+    // `{errorCode, errorMessage}`) never satisfies isValidResponse (which
+    // expects a real order-mutation/order-book shape), so validating first
+    // would throw a misleading "unexpected shape" error instead of
+    // transparently refreshing the session and retrying.
     if (!isRetry && this.isSessionExpired(response.status, response.body)) {
       const refreshedSession = await this.sessionManager.refresh();
       return this.performRequest<T>(
@@ -299,6 +286,12 @@ export class AngelOneExecutor implements IOrderExecutor {
         method,
         refreshedSession,
         true,
+      );
+    }
+
+    if (!isValidResponse(response.body)) {
+      throw new BrokerOrderApiException(
+        `Unexpected response shape from Dhan order API at ${path}`,
       );
     }
 
@@ -330,7 +323,7 @@ export class AngelOneExecutor implements IOrderExecutor {
       const response = await this.httpClient.request<T>(httpRequest);
       if (
         response.status >= 500 &&
-        attempt <= AngelOneExecutor.MAX_TRANSIENT_RETRIES
+        attempt <= DhanExecutor.MAX_TRANSIENT_RETRIES
       ) {
         await this.delayBeforeRetry(attempt);
         return this.safeSend<T>(httpRequest, attempt + 1);
@@ -338,26 +331,26 @@ export class AngelOneExecutor implements IOrderExecutor {
       return response;
     } catch (error) {
       const name = this.getErrorName(error);
-      if (attempt <= AngelOneExecutor.MAX_TRANSIENT_RETRIES) {
+      if (attempt <= DhanExecutor.MAX_TRANSIENT_RETRIES) {
         await this.delayBeforeRetry(attempt);
         return this.safeSend<T>(httpRequest, attempt + 1);
       }
       if (name === 'TimeoutError' || name === 'AbortError') {
         throw new BrokerOrderApiException(
-          `Angel One order API request to ${httpRequest.url} timed out after ${AngelOneExecutor.MAX_TRANSIENT_RETRIES} retries`,
+          `Dhan order API request to ${httpRequest.url} timed out after ${DhanExecutor.MAX_TRANSIENT_RETRIES} retries`,
         );
       }
       const message =
         error instanceof Error ? error.message : 'Unknown transport error';
       throw new BrokerOrderApiException(
-        `Angel One order API request failed after ${AngelOneExecutor.MAX_TRANSIENT_RETRIES} retries: ${message}`,
+        `Dhan order API request failed after ${DhanExecutor.MAX_TRANSIENT_RETRIES} retries: ${message}`,
       );
     }
   }
 
   /** attempt is 1-indexed; delay grows exponentially (300ms, 600ms, ...) with no jitter — a bounded, small number of retries against a single broker HTTP call, not the queue-level retry's longer backoff. */
   private delayBeforeRetry(attempt: number): Promise<void> {
-    const delayMs = AngelOneExecutor.RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+    const delayMs = DhanExecutor.RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
     return new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -365,12 +358,12 @@ export class AngelOneExecutor implements IOrderExecutor {
     if (status === 401) {
       return true;
     }
-    if (typeof body === 'object' && body !== null && 'message' in body) {
-      const message = String(body.message).toLowerCase();
+    if (typeof body === 'object' && body !== null && 'errorMessage' in body) {
+      const message = String(body.errorMessage).toLowerCase();
       return (
         message.includes('session') ||
         message.includes('token') ||
-        message.includes('login')
+        message.includes('invalid access')
       );
     }
     return false;
@@ -383,20 +376,11 @@ export class AngelOneExecutor implements IOrderExecutor {
     return undefined;
   }
 
-  private buildHeaders(
-    apiKey: string,
-    jwtToken: string,
-  ): Record<string, string> {
+  private buildHeaders(accessToken: string): Record<string, string> {
     return {
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-PrivateKey': apiKey,
-      'X-ClientLocalIP': getLocalIp(),
-      'X-ClientPublicIP': getPublicIp(),
-      'X-MACAddress': getMacAddress(),
-      Authorization: `Bearer ${jwtToken}`,
+      'access-token': accessToken,
     };
   }
 }

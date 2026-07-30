@@ -4,6 +4,8 @@ import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { ConfigService } from '@core/config/config.service';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
+import { TIMER_SCHEDULER } from '@shared/scheduler/timer-scheduler.constants';
+import type { ITimerScheduler } from '@shared/scheduler/timer-scheduler.interface';
 import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import type { CreateTradeParams } from '@modules/trading-engine/domain/create-trade.params';
@@ -50,6 +52,7 @@ export class QueueWorker implements OnModuleDestroy {
     private readonly configService: ConfigService,
     private readonly marketDataService: MarketDataService,
     private readonly tradingModeService: TradingModeService,
+    @Inject(TIMER_SCHEDULER) private readonly scheduler: ITimerScheduler,
   ) {}
 
   /**
@@ -199,10 +202,21 @@ export class QueueWorker implements OnModuleDestroy {
       new OrderRetryEvent(item.id, item.attempts, reason, delayMs),
     );
 
-    // No real timer: the delay above is published for observability, but the
-    // retry attempt itself happens as the very next step in this same
-    // sequential chain, keeping retries fully deterministic in tests.
+    // Actually wait out the computed backoff before retrying — this used to
+    // publish delayMs for observability but retry immediately regardless,
+    // which meant a transient broker/network failure was hammered
+    // back-to-back up to maxRetries times with zero delay, defeating the
+    // entire point of exponential backoff (and risking tripping the
+    // broker's own rate limiting). Still fully deterministic in tests via
+    // ITimerScheduler (InstantTimerScheduler fires immediately there).
+    await this.delay(delayMs);
     await this.processOnce(item, ownerId);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.scheduler.setTimeout(() => resolve(), ms);
+    });
   }
 
   /**

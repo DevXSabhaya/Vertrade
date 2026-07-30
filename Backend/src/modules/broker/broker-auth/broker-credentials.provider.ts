@@ -8,10 +8,9 @@ export class BrokerCredentialsProvider {
 
   getCredentials(): BrokerCredentials {
     return new BrokerCredentials(
-      this.configService.angelOneApiKey,
-      this.configService.angelOneClientCode,
-      this.configService.angelOnePassword,
-      this.configService.angelOneTotpSecret,
+      this.configService.dhanClientId,
+      this.configService.dhanApiKey,
+      this.configService.dhanAccessToken,
     );
   }
 }

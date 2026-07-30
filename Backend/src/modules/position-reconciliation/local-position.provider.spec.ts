@@ -3,7 +3,7 @@ import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.e
 import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import { LocalPositionProvider } from './local-position.provider';
 
 class FixedClock {
@@ -33,7 +33,7 @@ describe('LocalPositionProvider', () => {
     tradingEngineService = new TradingEngineService(
       eventBus,
       executor as unknown as PaperExecutor,
-      executor as unknown as AngelOneExecutor,
+      executor as unknown as DhanExecutor,
       new FixedClock(),
     );
     provider = new LocalPositionProvider(tradingEngineService);

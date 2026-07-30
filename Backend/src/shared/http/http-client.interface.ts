@@ -3,6 +3,13 @@ export interface HttpRequestOptions {
   headers?: Record<string, string>;
   body?: unknown;
   timeoutMs?: number;
+  /**
+   * Defaults to `'json'`. DhanInstrumentMasterProvider downloads a CSV file
+   * (not JSON) from Dhan's instrument-master URL, so it opts into `'text'`
+   * to get the raw response body back verbatim instead of a failed
+   * `JSON.parse`.
+   */
+  responseType?: 'json' | 'text';
 }
 
 export interface HttpResponse<T = unknown> {

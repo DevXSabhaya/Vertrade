@@ -42,14 +42,14 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
  * Fully deterministic simulator: no randomness, no timers, no hidden delays.
  * Every fill outcome is either explicitly queued by the caller (queueNextFill)
  * or derived from an explicitly-set market price (setMarketPrice) — never
- * guessed. Must satisfy the exact same contract tests as AngelOneExecutor.
+ * guessed. Must satisfy the exact same contract tests as DhanExecutor.
  *
  * Every public method is declared `async` even though nothing inside ever
  * awaits anything — that's deliberate: it guarantees a synchronous throw
  * (e.g. from assertValidRequest) becomes a REJECTED PROMISE, exactly like a
  * real network-backed executor. Without `async`, a thrown error would escape
  * synchronously at the call site instead of rejecting the returned promise,
- * which would make PaperExecutor behave differently from AngelOneExecutor
+ * which would make PaperExecutor behave differently from DhanExecutor
  * under `await`/`.catch()` — breaking Liskov substitutability.
  *
  * `marketPrices` is kept current by subscribing to the same

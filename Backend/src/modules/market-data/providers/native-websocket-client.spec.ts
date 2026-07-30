@@ -71,9 +71,9 @@ describe('NativeWebSocketClient', () => {
     expect(client.isOpen()).toBe(true);
   });
 
-  it('delivers messages to the registered handler', async () => {
+  it('delivers text messages to the registered handler', async () => {
     const client = new NativeWebSocketClient();
-    const received: string[] = [];
+    const received: (string | ArrayBuffer)[] = [];
     client.onMessage((data) => received.push(data));
 
     const connectPromise = client.connect('wss://example.invalid/stream');
@@ -83,6 +83,22 @@ describe('NativeWebSocketClient', () => {
     fakeSocket?.emit('message', { data: 'hello' });
 
     expect(received).toEqual(['hello']);
+  });
+
+  it('passes binary frames through as ArrayBuffer, unmodified — DhanHQ ticks are binary', async () => {
+    const client = new NativeWebSocketClient();
+    const received: (string | ArrayBuffer)[] = [];
+    client.onMessage((data) => received.push(data));
+
+    const connectPromise = client.connect('wss://example.invalid/stream');
+    fakeSocket?.simulateOpen();
+    await connectPromise;
+
+    const buffer = new Uint8Array([1, 2, 3, 4]).buffer;
+    fakeSocket?.emit('message', { data: buffer });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toBe(buffer);
   });
 
   it('notifies onClose with the close code and reason', async () => {

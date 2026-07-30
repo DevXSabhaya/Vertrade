@@ -1,6 +1,6 @@
 /**
  * Reads the `exp` claim out of a JWT's payload without verifying the
- * signature — we don't hold Angel One's signing key, we're only extracting
+ * signature — we don't hold the broker's signing key, we're only extracting
  * our own bookkeeping expiry, never trusting the token for authorization.
  */
 export function decodeJwtExpiry(jwtToken: string): Date | null {

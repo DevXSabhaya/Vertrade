@@ -1,5 +1,5 @@
 /**
- * Shared by the reconnect-backoff util (used inside AngelOneMarketDataProvider
+ * Shared by the reconnect-backoff util (used inside DhanMarketDataProvider
  * for its own socket-level reconnects) and MarketDataService's provider-agnostic
  * heartbeat-staleness watchdog, so both apply the exact same policy.
  */

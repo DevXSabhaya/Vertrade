@@ -252,6 +252,37 @@ export class OrderQueueService implements OnModuleInit {
     return this.lockManager.cleanupStaleLocks();
   }
 
+  /**
+   * Evicts terminal (COMPLETED/FAILED/CANCELLED/EXPIRED) items from the
+   * in-memory `items` map once they've sat there for longer than `maxAgeMs`.
+   * Without this, `items` grows without bound for the lifetime of the
+   * process — every trade this deployment ever places adds one entry that
+   * nothing previously ever removed, a slow memory leak that only becomes
+   * visible after days/weeks of continuous production uptime. Safe: the
+   * durable Mongo repository (`QUEUE_REPOSITORY`) already has every item's
+   * full history independent of this in-memory map, and a terminal item's
+   * idempotency key deliberately does NOT need to keep deduping anything —
+   * `IdempotencyKeyGenerator`'s coarse time bucket has long since rolled
+   * over by the time an item is old enough to prune here.
+   */
+  pruneCompletedItems(maxAgeMs: number): number {
+    const now = this.clock.now().getTime();
+    let removedCount = 0;
+
+    for (const [key, item] of this.items) {
+      if (!QueueItemTransitions.isTerminal(item.state)) {
+        continue;
+      }
+      const ageMs = now - new Date(item.toSnapshot().updatedAt).getTime();
+      if (ageMs > maxAgeMs) {
+        this.items.delete(key);
+        removedCount += 1;
+      }
+    }
+
+    return removedCount;
+  }
+
   private requireItem(idempotencyKey: string): QueueItem {
     const item = this.items.get(idempotencyKey);
     if (!item) {

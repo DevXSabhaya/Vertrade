@@ -199,5 +199,80 @@ describe('InstrumentResolverController', () => {
         tickSize: 0.05,
       });
     });
+
+    it("classifies a real Dhan equity row (segment 'EQUITY') as instrumentType EQUITY — regression: this previously checked for 'EQ', an Angel One-era value Dhan never actually sends, silently misclassifying every equity as OTHER", () => {
+      const equity = new Instrument(
+        'MOCK-RELIANCE',
+        'NSE_EQ',
+        'EQUITY',
+        'RELIANCE',
+        'RELIANCE',
+        null,
+        null,
+        null,
+        1,
+        0.05,
+        2,
+      );
+      const controller = buildController({
+        instrumentMasterService: {
+          search: jest.fn().mockReturnValue([equity]),
+        },
+      });
+
+      const [result] = controller.search({ q: 'RELIANCE' });
+
+      expect(result.instrumentType).toBe('EQUITY');
+    });
+
+    it('classifies a FUTIDX/FUTSTK/FUTCOM row as instrumentType FUTURE', () => {
+      const future = new Instrument(
+        'MOCK-NIFTY-FUT',
+        'NSE_FNO',
+        'FUTIDX',
+        'NIFTY-Oct2026-FUT',
+        'NIFTY',
+        new Date('2026-10-27T00:00:00.000Z'),
+        null,
+        null,
+        75,
+        0.05,
+        2,
+      );
+      const controller = buildController({
+        instrumentMasterService: {
+          search: jest.fn().mockReturnValue([future]),
+        },
+      });
+
+      const [result] = controller.search({ q: 'NIFTY FUT' });
+
+      expect(result.instrumentType).toBe('FUTURE');
+    });
+
+    it('classifies an unrecognized segment as OTHER rather than guessing', () => {
+      const index = new Instrument(
+        'MOCK-NIFTY-INDEX',
+        'IDX_I',
+        'INDEX',
+        'NIFTY',
+        'NIFTY',
+        null,
+        null,
+        null,
+        1,
+        0.05,
+        2,
+      );
+      const controller = buildController({
+        instrumentMasterService: {
+          search: jest.fn().mockReturnValue([index]),
+        },
+      });
+
+      const [result] = controller.search({ q: 'NIFTY' });
+
+      expect(result.instrumentType).toBe('OTHER');
+    });
   });
 });

@@ -14,9 +14,7 @@ import type { IOrderExecutor } from './order-executor.interface';
 export function selectOrderExecutor(
   configService: Pick<ConfigService, 'tradingMode'>,
   paperExecutor: IOrderExecutor,
-  angelOneExecutor: IOrderExecutor,
+  dhanExecutor: IOrderExecutor,
 ): IOrderExecutor {
-  return configService.tradingMode === 'LIVE'
-    ? angelOneExecutor
-    : paperExecutor;
+  return configService.tradingMode === 'LIVE' ? dhanExecutor : paperExecutor;
 }

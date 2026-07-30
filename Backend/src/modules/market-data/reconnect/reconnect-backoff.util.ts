@@ -2,7 +2,7 @@ import type { ReconnectOptions } from '../models/reconnect-options.model';
 
 /**
  * Pure, deterministic (given a fixed randomSource) exponential backoff with
- * jitter. Used both by AngelOneMarketDataProvider's own socket-level
+ * jitter. Used both by DhanMarketDataProvider's own socket-level
  * reconnects and by MarketDataService's provider-agnostic heartbeat-staleness
  * watchdog, so the exact same policy applies everywhere reconnection happens
  * — even when the active provider is the Mock one.

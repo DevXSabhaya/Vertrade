@@ -8,7 +8,7 @@ describe('MockInstrumentMasterProvider', () => {
     const reliance = instruments.find((i) => i.name === 'RELIANCE');
 
     expect(reliance).toBeDefined();
-    expect(reliance?.segment).toBe('EQ');
+    expect(reliance?.segment).toBe('EQUITY');
     expect(reliance?.strike).toBeNull();
     expect(reliance?.optionType).toBeNull();
     expect(reliance?.expiry).toBeNull();
@@ -25,7 +25,7 @@ describe('MockInstrumentMasterProvider', () => {
     );
 
     expect(contract).toBeDefined();
-    expect(contract?.exchange).toBe('BSE');
+    expect(contract?.exchange).toBe('BSE_FNO');
     expect(contract?.segment).toBe('OPTIDX');
     expect(contract?.expiry).not.toBeNull();
     expect((contract?.expiry as Date).getTime()).toBeGreaterThan(Date.now());
@@ -73,7 +73,7 @@ describe('MockInstrumentMasterProvider', () => {
     );
 
     expect(contract).toBeDefined();
-    expect(contract?.exchange).toBe('NFO');
+    expect(contract?.exchange).toBe('NSE_FNO');
     expect(contract?.segment).toBe('OPTIDX');
   });
 
@@ -88,7 +88,7 @@ describe('MockInstrumentMasterProvider', () => {
     );
 
     expect(contract).toBeDefined();
-    expect(contract?.exchange).toBe('NFO');
+    expect(contract?.exchange).toBe('NSE_FNO');
     expect(contract?.segment).toBe('OPTIDX');
   });
 

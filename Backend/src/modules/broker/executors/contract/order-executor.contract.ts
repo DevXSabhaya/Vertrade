@@ -6,7 +6,7 @@ import type { OrderResponse } from '../models/order-response.model';
 
 /**
  * Each implementation's own test setup decides HOW to produce these two
- * preconditions (e.g. PaperExecutor uses queueNextFill(); AngelOneExecutor's
+ * preconditions (e.g. PaperExecutor uses queueNextFill(); DhanExecutor's
  * test wires its mocked HTTP client to respond accordingly) — the contract
  * only asserts on the resulting OBSERVABLE BEHAVIOR, which is exactly what
  * Liskov substitutability requires.
@@ -20,7 +20,7 @@ export interface OrderExecutorContractContext {
 }
 
 /**
- * Run against BOTH PaperExecutor and AngelOneExecutor. If either fails one of
+ * Run against BOTH PaperExecutor and DhanExecutor. If either fails one of
  * these, the two implementations are not truly interchangeable and the
  * Trading Engine (a later phase) could not safely depend on IOrderExecutor alone.
  */

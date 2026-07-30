@@ -48,7 +48,12 @@ function classifyInstrumentType(
 ): InstrumentSearchResultBody['instrumentType'] {
   if (instrument.optionType) return 'OPTION';
   if (instrument.segment.startsWith('FUT')) return 'FUTURE';
-  if (instrument.segment === 'EQ') return 'EQUITY';
+  // 'EQUITY' is Dhan's real SEM_INSTRUMENT_NAME value for equities
+  // (verified against a live instrument-master CSV download) — this
+  // previously checked for 'EQ', an Angel One-era value that never
+  // actually appears in Dhan data, silently misclassifying every real
+  // equity result as 'OTHER'.
+  if (instrument.segment === 'EQUITY') return 'EQUITY';
   return 'OTHER';
 }
 

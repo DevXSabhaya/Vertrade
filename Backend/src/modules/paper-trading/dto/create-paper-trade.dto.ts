@@ -61,7 +61,7 @@ export class CreatePaperTradeDto {
    * Only meaningful when this deployment's TRADING_MODE is LIVE — ignored
    * entirely for PAPER (PaperExecutor never reads it). Required, in addition
    * to the LIVE_TRADING_ENABLED feature flag and a HEALTHY broker snapshot,
-   * before AngelOneExecutor will place a real entry order
+   * before DhanExecutor will place a real entry order
    * (LiveOrderSafetyGateService.checkEntryAllowed); omitting it — the
    * default — means a live order is always blocked, never silently routed
    * to paper.

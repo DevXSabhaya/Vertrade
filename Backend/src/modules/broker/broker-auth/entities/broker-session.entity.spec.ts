@@ -2,7 +2,7 @@ import { BrokerToken } from '../value-objects/broker-token.vo';
 import { BrokerSession } from './broker-session.entity';
 
 describe('BrokerSession', () => {
-  const token = new BrokerToken('jwt', 'refresh', 'feed');
+  const token = new BrokerToken('access-token');
 
   it('is not expired before its expiresAt time', () => {
     const session = new BrokerSession(

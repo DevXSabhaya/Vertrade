@@ -12,7 +12,7 @@ export class BrokerTokenDocumentSchema {
   @Prop({ required: true })
   broker!: string;
 
-  /** AES-256-GCM ciphertext of the JSON-serialized {jwtToken, refreshToken, feedToken, clientCode, issuedAt}. */
+  /** AES-256-GCM ciphertext of the JSON-serialized {clientCode, accessToken, issuedAt}. */
   @Prop({ required: true })
   encryptedPayload!: string;
 

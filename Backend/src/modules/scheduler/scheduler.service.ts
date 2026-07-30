@@ -40,6 +40,18 @@ export class SchedulerService implements OnModuleDestroy {
   private cleanupHandle: unknown = null;
   private riskMaintenanceHandle: unknown = null;
   private started = false;
+  /**
+   * Guards against overlapping runs of the same job. Without this, a job
+   * that takes longer than its own interval to finish (e.g. INSTRUMENT_REFRESH
+   * blocked on a slow broker download, or any job stalled during a broker
+   * outage) gets fired again by the next interval tick before the first
+   * invocation has returned — two concurrent runs racing each other over
+   * the same shared state (the instrument cache swap, the order-queue
+   * cleanup pass, etc). Also protects the manual trigger entrypoints
+   * (`triggerMorningStartup`/`triggerMarketClose`) from double-firing if
+   * called again while already running.
+   */
+  private readonly inFlightJobs = new Set<JobName>();
 
   constructor(
     private readonly jobRegistry: JobRegistry,
@@ -118,6 +130,28 @@ export class SchedulerService implements OnModuleDestroy {
   }
 
   async runJob(name: JobName): Promise<JobResult> {
+    if (this.inFlightJobs.has(name)) {
+      const now = this.clock.now().toISOString();
+      return {
+        jobName: name,
+        succeeded: false,
+        startedAt: now,
+        finishedAt: now,
+        durationMs: 0,
+        error: 'Skipped: a previous run of this job is still in progress',
+        skipped: true,
+      };
+    }
+
+    this.inFlightJobs.add(name);
+    try {
+      return await this.runJobNow(name);
+    } finally {
+      this.inFlightJobs.delete(name);
+    }
+  }
+
+  private async runJobNow(name: JobName): Promise<JobResult> {
     const job = this.jobRegistry.get(name);
     const startedAt = this.clock.now();
 

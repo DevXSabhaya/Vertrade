@@ -12,7 +12,7 @@ import { MOCK_MARKET_DATA_OPTIONS } from './mock-market-data-provider.constants'
 import type { MockMarketDataProviderOptions } from './mock-market-data-provider.options';
 
 /**
- * Fully in-memory simulated feed — no Angel One credentials, no real network,
+ * Fully in-memory simulated feed — no Dhan credentials, no real network,
  * ever. Deterministic mode disables all timers so unit tests can trigger
  * ticks/heartbeats manually and get fully reproducible results; live mode
  * runs a real setInterval-driven random walk per subscribed instrument via

@@ -16,7 +16,7 @@ import { DEFAULT_RECONNECT_OPTIONS } from './models/reconnect-options.model';
 import { MockMarketDataProvider } from './providers/mock/mock-market-data.provider';
 import { MOCK_MARKET_DATA_OPTIONS } from './providers/mock/mock-market-data-provider.constants';
 import { DEFAULT_MOCK_PROVIDER_OPTIONS } from './providers/mock/mock-market-data-provider.options';
-import { AngelOneMarketDataProvider } from './providers/angel-one/angel-one-market-data.provider';
+import { DhanMarketDataProvider } from './providers/dhan/dhan-market-data.provider';
 import { MARKET_DATA_WEBSOCKET_CLIENT } from './providers/websocket-client.constants';
 import { NativeWebSocketClient } from './providers/native-websocket-client';
 import type { IMarketDataProvider } from './interfaces/market-data-provider.interface';
@@ -24,7 +24,7 @@ import type { IMarketDataProvider } from './interfaces/market-data-provider.inte
 /**
  * The single owner of market data. ORDER_EXECUTOR-style DI token selection:
  * MARKET_DATA_PROVIDER resolves to MockMarketDataProvider by default —
- * switching to AngelOneMarketDataProvider is a MARKET_DATA_PROVIDER=ANGEL_ONE
+ * switching to DhanMarketDataProvider is a MARKET_DATA_PROVIDER=DHAN
  * environment variable change only, never a code change. The Trading Engine
  * does not import this module: it only ever subscribes to
  * MarketPriceUpdatedEvent, published here.
@@ -47,20 +47,16 @@ import type { IMarketDataProvider } from './interfaces/market-data-provider.inte
       useValue: DEFAULT_RECONNECT_OPTIONS,
     },
     MockMarketDataProvider,
-    AngelOneMarketDataProvider,
+    DhanMarketDataProvider,
     {
       provide: MARKET_DATA_PROVIDER,
       useFactory: (
         configService: ConfigService,
         mock: MockMarketDataProvider,
-        angelOne: AngelOneMarketDataProvider,
+        dhan: DhanMarketDataProvider,
       ): IMarketDataProvider =>
-        configService.marketDataProvider === 'ANGEL_ONE' ? angelOne : mock,
-      inject: [
-        ConfigService,
-        MockMarketDataProvider,
-        AngelOneMarketDataProvider,
-      ],
+        configService.marketDataProvider === 'DHAN' ? dhan : mock,
+      inject: [ConfigService, MockMarketDataProvider, DhanMarketDataProvider],
     },
   ],
   exports: [MarketDataService],

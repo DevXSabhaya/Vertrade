@@ -41,7 +41,11 @@ function option(
   );
 }
 
-function nonOption(token: string, name: string, segment = 'EQ'): Instrument {
+function nonOption(
+  token: string,
+  name: string,
+  segment = 'EQUITY',
+): Instrument {
   return new Instrument(
     token,
     'NSE',

@@ -8,7 +8,7 @@ import { HealthStatus } from '../models/health-status.enum';
 
 /**
  * The broker order-placement API sits under the same authenticated REST
- * surface as everything else in AngelOneExecutor (Phase 4) — same honest
+ * surface as everything else in DhanExecutor (Phase 4) — same honest
  * session-validity proxy and same caveat as RestApiHealthIndicator. Kept as
  * a distinct indicator (rather than merged with `restApi`) because the
  * frozen architecture lists "Order API" as its own monitored component, and

@@ -4,13 +4,13 @@ import type { ExitRequest } from './models/exit-request.model';
 import type { OrderResponse } from './models/order-response.model';
 
 /**
- * The Trading Engine (a later phase) will depend only on this interface —
- * never on PaperExecutor or AngelOneExecutor directly, and never on any
- * broker-specific detail. Adding Zerodha/Upstox/Fyers/Shoonya later means
- * writing one new class implementing this interface; nothing else changes.
+ * The Trading Engine depends only on this interface — never on PaperExecutor
+ * or DhanExecutor directly, and never on any broker-specific detail. Adding
+ * another broker later means writing one new class implementing this
+ * interface; nothing else changes.
  *
- * PaperExecutor and AngelOneExecutor must be behaviorally interchangeable —
- * both are run through the exact same contract test suite
+ * PaperExecutor and DhanExecutor must be behaviorally interchangeable — both
+ * are run through the exact same contract test suite
  * (contract/order-executor.contract.ts).
  */
 export interface IOrderExecutor {

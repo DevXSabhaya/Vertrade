@@ -187,7 +187,7 @@ function BrokerConnectionCard() {
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Broker</dt>
-              <dd className="font-medium text-ink-900">Angel One</dd>
+              <dd className="font-medium text-ink-900">Dhan</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Connection</dt>

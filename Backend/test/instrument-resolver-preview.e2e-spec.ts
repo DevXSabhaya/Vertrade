@@ -12,7 +12,7 @@ import { InstrumentMasterService } from '../src/modules/instrument-master/instru
  * instrument master provider — this exercises the real
  * `MockInstrumentMasterProvider` wired in by `INSTRUMENT_MASTER_PROVIDER`
  * (defaulting to MOCK), proving natural trading calls like
- * "SENSEX 77200 CE" resolve end to end without any Angel One credentials.
+ * "SENSEX 77200 CE" resolve end to end without any Dhan credentials.
  */
 describe('Instrument resolver preview (e2e)', () => {
   let app: INestApplication<App>;
@@ -65,7 +65,7 @@ describe('Instrument resolver preview (e2e)', () => {
       .query({ query: 'RELIANCE' })
       .expect(200);
 
-    expect(res.body.tradingSymbol).toBe('RELIANCE-EQ');
+    expect(res.body.tradingSymbol).toBe('RELIANCE');
     expect(res.body.strike).toBeNull();
     expect(res.body.optionType).toBeNull();
   });
@@ -79,7 +79,7 @@ describe('Instrument resolver preview (e2e)', () => {
 
     expect(res.body.strike).toBe(77200);
     expect(res.body.optionType).toBe('CE');
-    expect(res.body.exchange).toBe('BSE');
+    expect(res.body.exchange).toBe('BSE_FNO');
     expect(res.body.instrumentToken).toEqual(expect.any(String));
     expect(res.body.expiry).toEqual(expect.any(String));
   });

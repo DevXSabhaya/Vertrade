@@ -4,7 +4,7 @@ import { DomainEvent } from '@core/event-bus/events/domain-event.base';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
 import type { PaperExecutor } from '@modules/broker/executors/paper.executor';
-import type { AngelOneExecutor } from '@modules/broker/executors/angel-one/angel-one.executor';
+import type { DhanExecutor } from '@modules/broker/executors/dhan/dhan.executor';
 import type { OrderQueueService } from '@modules/order-queue/order-queue.service';
 import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { MarketPriceUpdatedEvent } from '@shared/events/market-price-updated.event';
@@ -70,7 +70,7 @@ describe('RecoverySnapshotService', () => {
         cancelOrder: jest.fn(),
         exitPosition: jest.fn(),
         getOrderStatus: jest.fn(),
-      } as unknown as AngelOneExecutor,
+      } as unknown as DhanExecutor,
       clock,
     );
     orderQueueService = { getAllItems: jest.fn().mockReturnValue([]) };
