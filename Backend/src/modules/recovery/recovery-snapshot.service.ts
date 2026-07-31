@@ -37,6 +37,15 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
     at: string;
   } | null = null;
   private debounceHandle: unknown = null;
+  /**
+   * `onModuleDestroy` only cancels a timer that's already pending — without
+   * this flag, a domain event published after destroy (e.g. during another
+   * service's own shutdown, or a stray async handler still flushing) would
+   * schedule a brand-new debounced capture that fires after the Mongo
+   * connection has already closed, crashing with a connection error instead
+   * of failing gracefully.
+   */
+  private destroyed = false;
 
   constructor(
     private readonly tradingEngineService: TradingEngineService,
@@ -135,7 +144,7 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private scheduleDebouncedCapture(): void {
-    if (this.debounceHandle !== null) {
+    if (this.destroyed || this.debounceHandle !== null) {
       return;
     }
     this.debounceHandle = this.scheduler.setTimeout(() => {
@@ -144,8 +153,9 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
     }, this.config.snapshotDebounceMs);
   }
 
-  /** Cancels any pending debounced capture — without this, a timer scheduled just before shutdown fires after the app (and its Mongo connection) has already closed. */
+  /** Cancels any pending debounced capture and permanently stops scheduling new ones — without this, a timer scheduled just before (or during) shutdown fires after the app (and its Mongo connection) has already closed. */
   onModuleDestroy(): void {
+    this.destroyed = true;
     if (this.debounceHandle !== null) {
       this.scheduler.clearTimeout(this.debounceHandle);
       this.debounceHandle = null;

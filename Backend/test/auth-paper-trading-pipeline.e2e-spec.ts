@@ -9,7 +9,7 @@ import {
   UserDocumentSchema,
   type UserDocument,
 } from '../src/modules/users/schema/user.schema';
-import { INSTRUMENT_MASTER_PROVIDER } from '../src/modules/instrument-master/instrument-master.constants';
+import { MOCK_INSTRUMENT_MASTER_PROVIDER } from '../src/modules/instrument-master/instrument-master.constants';
 import { InstrumentMasterService } from '../src/modules/instrument-master/instrument-master.service';
 import { Instrument } from '../src/modules/instrument-master/entities/instrument.entity';
 import type { IInstrumentMasterProvider } from '../src/modules/instrument-master/interfaces/instrument-master-provider.interface';
@@ -70,7 +70,7 @@ describe('Auth + paper trading pipeline (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(INSTRUMENT_MASTER_PROVIDER)
+      .overrideProvider(MOCK_INSTRUMENT_MASTER_PROVIDER)
       .useValue(stubProvider)
       .overrideProvider(TRADING_HOURS_CONFIG)
       .useValue(alwaysOpenTradingHours)

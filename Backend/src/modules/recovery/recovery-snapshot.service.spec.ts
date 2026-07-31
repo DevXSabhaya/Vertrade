@@ -186,5 +186,24 @@ describe('RecoverySnapshotService', () => {
 
       expect(await service.loadLatestSnapshot()).toBeNull();
     });
+
+    it('cancels a pending debounced capture on destroy', () => {
+      subscribeToAllHandlers.forEach((h) => h(new TestEvent()));
+      expect(scheduler.pendingTimeoutCount()).toBe(1);
+
+      service.onModuleDestroy();
+
+      expect(scheduler.pendingTimeoutCount()).toBe(0);
+    });
+
+    it('never schedules a new capture from an event published after destroy — regression: a stray event during shutdown must not fire a Mongo write after the connection has closed', async () => {
+      service.onModuleDestroy();
+
+      subscribeToAllHandlers.forEach((h) => h(new TestEvent()));
+
+      expect(scheduler.pendingTimeoutCount()).toBe(0);
+      await scheduler.fireAllTimeoutsUntilDrained();
+      expect(await service.loadLatestSnapshot()).toBeNull();
+    });
   });
 });

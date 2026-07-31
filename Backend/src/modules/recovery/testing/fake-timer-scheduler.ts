@@ -68,4 +68,9 @@ export class FakeTimerScheduler implements ITimerScheduler {
     return Array.from(this.intervals.values()).filter((e) => !e.cancelled)
       .length;
   }
+
+  pendingTimeoutCount(): number {
+    return Array.from(this.timeouts.values()).filter((e) => !e.cancelled)
+      .length;
+  }
 }

@@ -173,4 +173,30 @@ export class ConfigService {
   get emailFromName(): string {
     return this.nestConfigService.get('EMAIL_FROM_NAME', { infer: true });
   }
+
+  get secretsDir(): string {
+    return this.nestConfigService.get('SECRETS_DIR', { infer: true });
+  }
+
+  get brokerTokenRenewalIntervalMs(): number {
+    return this.nestConfigService.get('BROKER_TOKEN_RENEWAL_INTERVAL_MS', {
+      infer: true,
+    });
+  }
+
+  /**
+   * Deprecated: kept only so an existing deployment's env config doesn't
+   * fail validation. Provider selection no longer reads these — it comes
+   * exclusively from TradingModeService's runtime mode (PAPER always MOCK,
+   * LIVE always DHAN). `validateEnv` always fills in a default when unset,
+   * so detecting "was this explicitly provided" has to look at the raw
+   * process environment, not the validated/defaulted config — used only to
+   * log a one-time startup warning that these vars are now a no-op.
+   */
+  get hasDeprecatedProviderOverride(): boolean {
+    return Boolean(
+      process.env.MARKET_DATA_PROVIDER?.trim() ||
+      process.env.INSTRUMENT_MASTER_PROVIDER?.trim(),
+    );
+  }
 }

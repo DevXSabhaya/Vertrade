@@ -39,6 +39,16 @@ export class InstrumentDocumentSchema {
 
   @Prop({ required: true })
   precision!: number;
+
+  /**
+   * Which provider this version's data came from — MOCK or DHAN. Optional
+   * (absent on documents written before this field existed): treated as
+   * "unknown/stale" by InstrumentMasterService's boot-time provenance check,
+   * which triggers an immediate refresh rather than trusting a
+   * possibly-wrong-source cache after a mode switch.
+   */
+  @Prop()
+  sourceProvider?: string;
 }
 
 export type InstrumentDocument = HydratedDocument<InstrumentDocumentSchema>;

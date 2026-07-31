@@ -10,6 +10,7 @@ import { decodeJwtExpiry } from './utils/jwt.util';
 import { InvalidCredentialsException } from './exceptions/invalid-credentials.exception';
 import { BrokerNetworkException } from './exceptions/broker-network.exception';
 import { BrokerTimeoutException } from './exceptions/broker-timeout.exception';
+import { BrokerSessionExpiredException } from './exceptions/broker-session-expired.exception';
 
 /**
  * DhanHQ v2 endpoint path used purely as a cheap, authenticated
@@ -65,14 +66,27 @@ function isDhanRenewTokenResponseBody(
  * Access DhanHQ APIs) and supplies via `DHAN_ACCESS_TOKEN`. So:
  *  - login() treats that configured token as already-issued credentials and
  *    validates it with a cheap authenticated GET call, rather than
- *    exchanging a password for a token.
+ *    exchanging a password for a token. It optionally accepts an
+ *    explicit override token (the manual reconnect flow) instead of the
+ *    configured `DHAN_ACCESS_TOKEN`.
  *  - refresh() calls DhanHQ's real `POST /v2/RenewToken` endpoint, which
  *    exchanges the current (still-active) session token for a brand new
  *    24-hour one — this only works for web-console-generated tokens, which
- *    is exactly what `login()` establishes. If the session token has
- *    already expired, RenewToken rejects it and this falls back to
- *    re-validating whatever `DHAN_ACCESS_TOKEN` is currently configured
- *    (covers an operator who rotated the env var and redeployed).
+ *    is exactly what `login()` establishes. Per DhanHQ's official docs
+ *    (https://dhanhq.co/docs/v2/authentication/): "This only renews tokens
+ *    which are active. If you try to renew an expired token, it will
+ *    return an error." There is no programmatic way to revive an
+ *    already-expired token — deliberately does NOT fall back to
+ *    re-validating the static `DHAN_ACCESS_TOKEN` env value on failure
+ *    (a prior version of this class did; that silently degraded over time,
+ *    since a renewed token's expiry clock resets on every successful
+ *    renewal while the static env token's clock never does, making the
+ *    fallback progressively less likely to succeed and masking real
+ *    expiry as a working session). Failure here always means "a human
+ *    needs to generate a fresh token in the Dhan console" —
+ *    `BrokerSessionExpiredException` communicates that unambiguously so
+ *    `BrokerSessionManager` can enter REAUTH_REQUIRED instead of silently
+ *    degrading.
  *  - logout() is a local-only no-op: Dhan has no session-revocation
  *    endpoint for this token type, so there's nothing to call — the
  *    session is simply forgotten locally by BrokerSessionManager.
@@ -85,9 +99,9 @@ export class DhanBrokerAuth implements IBrokerAuth {
     @Inject(BROKER_HTTP_CLIENT) private readonly httpClient: IBrokerHttpClient,
   ) {}
 
-  async login(): Promise<BrokerSession> {
+  async login(overrideAccessToken?: string): Promise<BrokerSession> {
     const credentials = this.credentialsProvider.getCredentials();
-    const accessToken = credentials.getAccessToken();
+    const accessToken = overrideAccessToken ?? credentials.getAccessToken();
 
     const response = await this.safeRequest(() =>
       this.httpClient.request<unknown>({
@@ -122,17 +136,14 @@ export class DhanBrokerAuth implements IBrokerAuth {
       return this.toSession(session.clientCode, response.body.accessToken);
     }
 
-    // RenewToken only works on a still-active token — if the session token
-    // already expired (or RenewToken otherwise rejected it), fall back to
-    // re-validating whatever DHAN_ACCESS_TOKEN is currently configured, so
-    // an operator who rotated the env var and redeployed is picked up
-    // automatically rather than failing outright.
-    const relogged = await this.login();
-    return new BrokerSession(
-      session.clientCode,
-      relogged.token,
-      relogged.issuedAt,
-      relogged.expiresAt,
+    // RenewToken only works on a still-active token, per DhanHQ's official
+    // docs (see class docstring) — a rejection here means the token is
+    // genuinely expired, not something a fallback can paper over. Surface
+    // this honestly so BrokerSessionManager enters REAUTH_REQUIRED.
+    const errorBody = this.asDhanErrorBody(response.body);
+    throw new BrokerSessionExpiredException(
+      errorBody?.errorMessage ||
+        `Dhan rejected the token renewal request (HTTP ${response.status}) — the broker session has expired and requires manual reconnection`,
     );
   }
 

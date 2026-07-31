@@ -10,8 +10,9 @@ import { InstrumentMasterService } from '../src/modules/instrument-master/instru
 /**
  * Requires a reachable MongoDB instance. Deliberately does NOT stub the
  * instrument master provider — this exercises the real
- * `MockInstrumentMasterProvider` wired in by `INSTRUMENT_MASTER_PROVIDER`
- * (defaulting to MOCK), proving natural trading calls like
+ * `MockInstrumentMasterProvider` (the default active provider for PAPER
+ * mode, InstrumentMasterService's own runtime selection — see
+ * `initializeForMode`), proving natural trading calls like
  * "SENSEX 77200 CE" resolve end to end without any Dhan credentials.
  */
 describe('Instrument resolver preview (e2e)', () => {

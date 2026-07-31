@@ -270,6 +270,110 @@ describe('BrokerSessionManager', () => {
     });
   });
 
+  describe('getAuthState', () => {
+    it('is DISCONNECTED before anything has ever been attempted', () => {
+      expect(manager.getAuthState()).toBe('DISCONNECTED');
+    });
+
+    it('is AUTHENTICATED once a valid session exists', async () => {
+      brokerAuth.login.mockResolvedValue(createSession());
+      brokerAuth.validateSession.mockReturnValue(true);
+      await manager.login();
+
+      expect(manager.getAuthState()).toBe('AUTHENTICATED');
+    });
+
+    it('is REAUTH_REQUIRED after a login failure, not DISCONNECTED', async () => {
+      brokerAuth.login.mockRejectedValue(new Error('invalid token'));
+      await expect(manager.login()).rejects.toThrow();
+
+      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+    });
+
+    it('is REAUTH_REQUIRED after a refresh failure', async () => {
+      brokerAuth.login.mockResolvedValue(createSession());
+      await manager.login();
+      brokerAuth.refresh.mockRejectedValue(new Error('renew failed'));
+
+      await expect(manager.refresh()).rejects.toThrow();
+      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+    });
+
+    it('returns to DISCONNECTED (not REAUTH_REQUIRED) after a deliberate logout following a prior failure', async () => {
+      brokerAuth.login.mockResolvedValueOnce(createSession());
+      await manager.login();
+      brokerAuth.refresh.mockRejectedValue(new Error('renew failed'));
+      await expect(manager.refresh()).rejects.toThrow();
+      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+
+      brokerAuth.login.mockResolvedValueOnce(createSession());
+      await manager.login();
+      await manager.logout();
+
+      expect(manager.getAuthState()).toBe('DISCONNECTED');
+    });
+  });
+
+  describe('reconnectWithToken', () => {
+    it('logs in with the supplied override token via the single-flight login path', async () => {
+      const session = createSession();
+      brokerAuth.login.mockResolvedValue(session);
+
+      const result = await manager.reconnectWithToken('fresh-token');
+
+      expect(result).toBe(session);
+      expect(brokerAuth.login).toHaveBeenCalledWith('fresh-token');
+      expect(manager.getAuthState()).toBe('DISCONNECTED');
+    });
+  });
+
+  describe('bootstrapLiveSession', () => {
+    it('refreshes an already-restored session rather than logging in again', async () => {
+      brokerAuth.login.mockResolvedValue(createSession());
+      await manager.login();
+      const refreshed = createSession();
+      brokerAuth.refresh.mockResolvedValue(refreshed);
+
+      await manager.bootstrapLiveSession();
+
+      expect(brokerAuth.refresh).toHaveBeenCalledTimes(1);
+      expect(brokerAuth.login).toHaveBeenCalledTimes(1);
+      expect(manager.getActiveSession()).toBe(refreshed);
+    });
+
+    it('logs in with the bootstrap seed when nothing was ever restored', async () => {
+      const session = createSession();
+      brokerAuth.login.mockResolvedValue(session);
+
+      await manager.bootstrapLiveSession();
+
+      expect(brokerAuth.login).toHaveBeenCalledTimes(1);
+      expect(manager.getActiveSession()).toBe(session);
+    });
+
+    it('never throws, even when the underlying login/refresh rejects', async () => {
+      brokerAuth.login.mockRejectedValue(new Error('expired'));
+
+      await expect(manager.bootstrapLiveSession()).resolves.toBeUndefined();
+      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+    });
+  });
+
+  describe('getLastRefreshedAt / getLastAuthEventAt', () => {
+    it('are null before anything has happened', () => {
+      expect(manager.getLastRefreshedAt()).toBeNull();
+      expect(manager.getLastAuthEventAt()).toBeNull();
+    });
+
+    it('are set after a successful login', async () => {
+      brokerAuth.login.mockResolvedValue(createSession());
+      await manager.login();
+
+      expect(manager.getLastRefreshedAt()).toBeInstanceOf(Date);
+      expect(manager.getLastAuthEventAt()).toBeInstanceOf(Date);
+    });
+  });
+
   describe('isSessionValid', () => {
     it('is false with no active session', () => {
       expect(manager.isSessionValid()).toBe(false);

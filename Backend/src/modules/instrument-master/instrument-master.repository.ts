@@ -6,6 +6,7 @@ import { OptionType } from './option-type.enum';
 import type {
   IInstrumentRepository,
   InstrumentMasterSnapshot,
+  InstrumentSourceProvider,
 } from './interfaces/instrument-repository.interface';
 import {
   InstrumentDocumentSchema,
@@ -26,6 +27,7 @@ export class InstrumentMasterRepository implements IInstrumentRepository {
   async saveSnapshot(
     instruments: Instrument[],
     version: number,
+    sourceProvider: InstrumentSourceProvider,
   ): Promise<void> {
     const docs = instruments.map((instrument) => ({
       version,
@@ -40,6 +42,7 @@ export class InstrumentMasterRepository implements IInstrumentRepository {
       lotSize: instrument.lotSize,
       tickSize: instrument.tickSize,
       precision: instrument.precision,
+      sourceProvider,
     }));
 
     for (let i = 0; i < docs.length; i += BATCH_SIZE) {
@@ -66,11 +69,19 @@ export class InstrumentMasterRepository implements IInstrumentRepository {
       return null;
     }
 
+    const firstDoc = docs[0] as { sourceProvider?: string } | undefined;
     return {
       version: latestVersion,
       savedAt: new Date(),
       instruments: docs.map((doc) => this.toEntity(doc)),
+      sourceProvider: this.toSourceProvider(firstDoc?.sourceProvider),
     };
+  }
+
+  private toSourceProvider(
+    value: string | undefined,
+  ): InstrumentSourceProvider | null {
+    return value === 'MOCK' || value === 'DHAN' ? value : null;
   }
 
   private async pruneOldVersions(): Promise<void> {

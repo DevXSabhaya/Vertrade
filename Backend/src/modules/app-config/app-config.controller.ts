@@ -11,9 +11,11 @@ import {
 } from '@modules/broker/broker-auth/dhan-account.service';
 import { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
+import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import { BusinessException } from '@common/exceptions/business.exception';
 import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { SetTradingModeDto } from './dto/set-trading-mode.dto';
+import { ReconnectBrokerDto } from './dto/reconnect-broker.dto';
 
 interface TradingModeResponseBody {
   readonly tradingMode: 'PAPER' | 'LIVE';
@@ -38,6 +40,14 @@ interface BrokerStatusResponseBody {
   readonly orderExecutionCapability: HealthStatus;
   readonly lastSuccessfulConnectionAt: string | null;
   readonly lastHealthCheckAt: string | null;
+  /** When the active broker session's access token expires — null in PAPER or with no active session. */
+  readonly tokenExpiresAt: string | null;
+  /** When the session was last successfully established/renewed — null in PAPER or before any successful auth. */
+  readonly lastRefreshedAt: string | null;
+  readonly instrumentMasterStatus: HealthStatus;
+  readonly websocketStatus: HealthStatus;
+  /** AUTHENTICATED / DISCONNECTED / REAUTH_REQUIRED — REAUTH_REQUIRED means a human must call /config/broker/reconnect with a freshly console-generated token before any LIVE order can be placed. */
+  readonly authState: 'AUTHENTICATED' | 'DISCONNECTED' | 'REAUTH_REQUIRED';
 }
 
 interface BrokerAccountSummaryResponseBody extends BrokerAccountSummary {
@@ -67,6 +77,7 @@ export class AppConfigController {
     private readonly brokerSessionManager: BrokerSessionManager,
     private readonly brokerHealthService: BrokerHealthService,
     private readonly dhanAccountService: DhanAccountService,
+    private readonly instrumentMasterService: InstrumentMasterService,
   ) {}
 
   @Get('trading-mode')
@@ -115,11 +126,18 @@ export class AppConfigController {
         orderExecutionCapability: HealthStatus.UNKNOWN,
         lastSuccessfulConnectionAt: null,
         lastHealthCheckAt: null,
+        tokenExpiresAt: null,
+        lastRefreshedAt: null,
+        instrumentMasterStatus: HealthStatus.UNKNOWN,
+        websocketStatus: HealthStatus.UNKNOWN,
+        authState: 'DISCONNECTED',
       };
     }
 
     const session = this.brokerSessionManager.getActiveSession();
     const snapshot = this.brokerHealthService.getSnapshot();
+    const lastRefreshedAt = this.brokerSessionManager.getLastRefreshedAt();
+    const instrumentSnapshot = this.instrumentMasterService.getSnapshot();
     return {
       tradingMode,
       brokerName: BROKER_NAME_DHAN,
@@ -130,6 +148,14 @@ export class AppConfigController {
       orderExecutionCapability: snapshot.restApiStatus,
       lastSuccessfulConnectionAt: snapshot.connectedSince,
       lastHealthCheckAt: snapshot.timestamp,
+      tokenExpiresAt: session?.expiresAt.toISOString() ?? null,
+      lastRefreshedAt: lastRefreshedAt?.toISOString() ?? null,
+      instrumentMasterStatus:
+        instrumentSnapshot.instrumentCount > 0
+          ? HealthStatus.HEALTHY
+          : HealthStatus.DISCONNECTED,
+      websocketStatus: snapshot.websocketStatus,
+      authState: this.brokerSessionManager.getAuthState(),
     };
   }
 
@@ -157,6 +183,24 @@ export class AppConfigController {
   async disconnectBroker(): Promise<BrokerStatusResponseBody> {
     this.assertLiveMode();
     await this.brokerSessionManager.logout();
+    return this.getBrokerStatus();
+  }
+
+  /**
+   * The clean reconnect flow required once a Dhan access token has
+   * genuinely expired: DhanHQ's individual-API account type (no Partner/
+   * OAuth app) has no automated way to revive an expired token — an
+   * operator must generate a fresh one in the Dhan web console (My Profile
+   * -> Access DhanHQ APIs) and submit it here. Not gated to LIVE mode: this
+   * is exactly how an operator fixes an expired token *before* attempting
+   * to switch to LIVE, not only after. Never logs or echoes the token back.
+   */
+  @Post('broker/reconnect')
+  @UseGuards(JwtAuthGuard)
+  async reconnectBroker(
+    @Body() dto: ReconnectBrokerDto,
+  ): Promise<BrokerStatusResponseBody> {
+    await this.brokerSessionManager.reconnectWithToken(dto.accessToken);
     return this.getBrokerStatus();
   }
 

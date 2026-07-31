@@ -12,8 +12,15 @@ import { GlobalExceptionFilter } from '@common/filters/global-exception.filter';
 import { createCorsOriginValidator } from '@core/config/cors-origin.util';
 import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import { MarketDataService } from '@modules/market-data/market-data.service';
+import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
+import { bootstrapEncryptionKey } from './bootstrap/encryption-key-bootstrap';
 
 async function bootstrap(): Promise<void> {
+  // Must run before NestFactory.create(): NestConfigModule.forRoot()'s
+  // validate() (env.validation.ts) reads process.env.TOKEN_ENCRYPTION_KEY
+  // synchronously as part of app creation, before any provider exists.
+  bootstrapEncryptionKey();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
@@ -49,6 +56,14 @@ async function bootstrap(): Promise<void> {
   );
 
   const configService = app.get(ConfigService);
+
+  if (configService.hasDeprecatedProviderOverride) {
+    logger.warn(
+      'MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER are deprecated and now ignored — provider selection is derived exclusively from the trading mode (PAPER always uses MOCK, LIVE always uses DHAN). Remove these env vars; they no longer have any effect.',
+      'Bootstrap',
+    );
+  }
+
   // Environment-aware, explicit-allow-list CORS (Phase 13 fix):
   //  - Every environment trusts exactly the origin(s) in FRONTEND_URL
   //    (comma-separated for more than one), matched exactly — never a
@@ -100,13 +115,17 @@ async function bootstrap(): Promise<void> {
   // server is already accepting traffic — never awaited by bootstrap. Errors
   // are caught and logged rather than left as unhandled rejections, since
   // nothing here may ever fail the process once boot has already succeeded.
-  if (configService.instrumentMasterProvider === 'MOCK') {
-    // The mock provider is entirely in-memory (no network call) and small
-    // (~10 equities + a handful of index option chains) — cheap either way —
-    // but is still deferred so it can never be the reason the HTTP port
-    // opens late. The real Dhan provider intentionally stays on its
-    // cron-only refresh schedule (see InstrumentMasterService.onModuleInit)
-    // and is never triggered here.
+  //
+  // Provider selection now comes exclusively from TradingModeService's
+  // persisted, runtime-switchable mode (bootstrap-once from TRADING_MODE on
+  // true first boot, never re-read from env after that) — never from the
+  // now-deprecated MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER env vars,
+  // which are no longer wired to provider selection at all.
+  const tradingModeService = app.get(TradingModeService);
+  if (tradingModeService.getCurrentMode() === 'PAPER') {
+    // Mock providers are entirely in-memory (no network call) and cheap
+    // either way — still deferred so they can never be the reason the HTTP
+    // port opens late.
     app
       .get(InstrumentMasterService)
       .refresh()
@@ -122,11 +141,7 @@ async function bootstrap(): Promise<void> {
           'Bootstrap',
         );
       });
-  }
 
-  if (configService.marketDataProvider === 'MOCK') {
-    // Same reasoning as the instrument master warm-up above: deferred so it
-    // can never delay the HTTP port opening, not because it is expensive.
     app
       .get(MarketDataService)
       .start()
@@ -140,6 +155,9 @@ async function bootstrap(): Promise<void> {
         );
       });
   }
+  // LIVE-mode broker authentication + Dhan-sourced provider startup is
+  // handled by TradingModeService's own OnApplicationBootstrap hook (only
+  // once mode is confirmed LIVE), not here — see trading-mode.service.ts.
 }
 
 bootstrap().catch((error: unknown) => {

@@ -1,4 +1,3 @@
-import type { ConfigService } from '@core/config/config.service';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { MarketPriceUpdatedEvent } from '@shared/events/market-price-updated.event';
 import { MarketDataService } from './market-data.service';
@@ -108,7 +107,12 @@ function reconnectOptions(
 }
 
 describe('MarketDataService', () => {
+  // `provider` is the MOCK-slot fake — the service's default active
+  // provider — and is what the pre-existing tests below drive directly.
+  // `dhanProvider` is the DHAN-slot fake, only exercised by the dedicated
+  // provider-switching tests further down.
   let provider: FakeMarketDataProvider;
+  let dhanProvider: FakeMarketDataProvider;
   let eventBus: IEventBus;
   let publishSpy: jest.Mock;
   let clock: FakeClock;
@@ -117,6 +121,7 @@ describe('MarketDataService', () => {
 
   beforeEach(() => {
     provider = new FakeMarketDataProvider();
+    dhanProvider = new FakeMarketDataProvider();
     publishSpy = jest.fn();
     eventBus = {
       publish: publishSpy,
@@ -127,12 +132,12 @@ describe('MarketDataService', () => {
     scheduler = new FakeTimerScheduler();
     service = new MarketDataService(
       provider,
+      dhanProvider,
       new SubscriptionManager(),
       eventBus,
       clock,
       scheduler,
       reconnectOptions(),
-      { marketDataProvider: 'MOCK' } as unknown as ConfigService,
     );
     service.onModuleInit();
   });
@@ -360,6 +365,7 @@ describe('MarketDataService', () => {
     it('reconnects when no heartbeat has been seen within the timeout', async () => {
       const shortTimeoutService = new MarketDataService(
         provider,
+        dhanProvider,
         new SubscriptionManager(),
         eventBus,
         clock,
@@ -368,7 +374,6 @@ describe('MarketDataService', () => {
           heartbeatTimeoutMs: 1_000,
           heartbeatCheckIntervalMs: 500,
         }),
-        { marketDataProvider: 'MOCK' } as unknown as ConfigService,
       );
       shortTimeoutService.onModuleInit();
       await shortTimeoutService.start();
@@ -382,6 +387,7 @@ describe('MarketDataService', () => {
     it('does not reconnect while heartbeats are arriving within the timeout', async () => {
       const shortTimeoutService = new MarketDataService(
         provider,
+        dhanProvider,
         new SubscriptionManager(),
         eventBus,
         clock,
@@ -390,7 +396,6 @@ describe('MarketDataService', () => {
           heartbeatTimeoutMs: 10_000,
           heartbeatCheckIntervalMs: 500,
         }),
-        { marketDataProvider: 'MOCK' } as unknown as ConfigService,
       );
       shortTimeoutService.onModuleInit();
       await shortTimeoutService.start();
@@ -399,6 +404,128 @@ describe('MarketDataService', () => {
       scheduler.fireAllIntervals();
 
       expect(provider.reconnectCalls).toBe(0);
+    });
+  });
+
+  describe('provider switching (initializeForMode/prepare/commit/abort)', () => {
+    it('defaults to MOCK until initializeForMode is called', async () => {
+      await service.start();
+      expect(provider.connectCalls).toBe(1);
+      expect(dhanProvider.connectCalls).toBe(0);
+    });
+
+    it('initializeForMode sets the initial active provider before anything connects', async () => {
+      service.initializeForMode('LIVE');
+      await service.start();
+
+      expect(dhanProvider.connectCalls).toBe(1);
+      expect(provider.connectCalls).toBe(0);
+    });
+
+    it('prepareProviderForMode connects the target provider without touching the currently active one', async () => {
+      await service.start();
+
+      await service.prepareProviderForMode('LIVE');
+
+      expect(dhanProvider.connectCalls).toBe(1);
+      expect(provider.isConnected()).toBe(true);
+      expect(dhanProvider.isConnected()).toBe(true);
+      // Ticks from the not-yet-committed target must not surface yet.
+      dhanProvider.emitHeartbeat();
+      expect(
+        publishSpy.mock.calls.some(
+          ([e]: [unknown]) => e instanceof HeartbeatReceivedEvent,
+        ),
+      ).toBe(false);
+    });
+
+    it('prepareProviderForMode replays current subscriptions onto the target provider', async () => {
+      await service.start();
+      await service.subscribeInstrument(NIFTY, 'sub-1');
+
+      await service.prepareProviderForMode('LIVE');
+
+      expect(dhanProvider.subscribeCalls).toHaveLength(1);
+      expect(dhanProvider.subscribeCalls[0]?.[0]?.instrumentToken).toBe(
+        'TOKEN-1',
+      );
+    });
+
+    it('commitProviderSwitch flips the active provider and disconnects the previous one', async () => {
+      await service.start();
+      await service.prepareProviderForMode('LIVE');
+
+      await service.commitProviderSwitch('LIVE');
+
+      expect(provider.isConnected()).toBe(false);
+      expect(dhanProvider.isConnected()).toBe(true);
+      expect(service.getHealth().providerType).toBe(
+        MarketDataProviderType.DHAN,
+      );
+    });
+
+    it('after commit, only the newly active provider drives ticks/heartbeats/state', async () => {
+      await service.start();
+      await service.prepareProviderForMode('LIVE');
+      await service.commitProviderSwitch('LIVE');
+      publishSpy.mockClear();
+
+      dhanProvider.emitHeartbeat();
+      expect(
+        publishSpy.mock.calls.some(
+          ([e]: [unknown]) => e instanceof HeartbeatReceivedEvent,
+        ),
+      ).toBe(true);
+
+      publishSpy.mockClear();
+      provider.emitHeartbeat();
+      expect(
+        publishSpy.mock.calls.some(
+          ([e]: [unknown]) => e instanceof HeartbeatReceivedEvent,
+        ),
+      ).toBe(false);
+    });
+
+    it('abortPreparedProvider disconnects whatever prepare connected, leaving the active provider untouched', async () => {
+      await service.start();
+      await service.prepareProviderForMode('LIVE');
+
+      await service.abortPreparedProvider('LIVE');
+
+      expect(dhanProvider.isConnected()).toBe(false);
+      expect(provider.isConnected()).toBe(true);
+      expect(service.getHealth().providerType).toBe(
+        MarketDataProviderType.MOCK,
+      );
+    });
+
+    it('prepare/commit are no-ops when the target mode is already active', async () => {
+      await service.start();
+
+      await service.prepareProviderForMode('PAPER');
+      await service.commitProviderSwitch('PAPER');
+
+      expect(dhanProvider.connectCalls).toBe(0);
+      expect(provider.connectCalls).toBe(1);
+    });
+
+    it('survives 200 repeated PAPER<->LIVE switches with exactly one active provider connected at a time and no leaked intervals', async () => {
+      await service.start();
+      let mode: 'PAPER' | 'LIVE' = 'PAPER';
+
+      for (let i = 0; i < 200; i += 1) {
+        mode = mode === 'PAPER' ? 'LIVE' : 'PAPER';
+        await service.prepareProviderForMode(mode);
+        await service.commitProviderSwitch(mode);
+
+        const expectedActive = mode === 'LIVE' ? dhanProvider : provider;
+        const expectedInactive = mode === 'LIVE' ? provider : dhanProvider;
+        expect(expectedActive.isConnected()).toBe(true);
+        expect(expectedInactive.isConnected()).toBe(false);
+      }
+
+      // Exactly one watchdog interval alive throughout, never accumulating.
+      expect(scheduler.pendingIntervalCount()).toBe(1);
     });
   });
 });

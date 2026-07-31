@@ -4,13 +4,11 @@ import { BrokerCredentials } from './value-objects/broker-credentials.vo';
 import { BrokerSession } from './entities/broker-session.entity';
 import { BrokerToken } from './value-objects/broker-token.vo';
 import type { ConfigService } from '@core/config/config.service';
-import type {
-  BrokerHttpRequest,
-  IBrokerHttpClient,
-} from './interfaces/broker-http-client.interface';
+import type { IBrokerHttpClient } from './interfaces/broker-http-client.interface';
 import { InvalidCredentialsException } from './exceptions/invalid-credentials.exception';
 import { BrokerNetworkException } from './exceptions/broker-network.exception';
 import { BrokerTimeoutException } from './exceptions/broker-timeout.exception';
+import { BrokerSessionExpiredException } from './exceptions/broker-session-expired.exception';
 
 function createJwtWithExpiry(expSeconds: number): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
@@ -154,29 +152,45 @@ describe('DhanBrokerAuth', () => {
       expect(refreshed.token.getAccessToken()).toBe('renewed-access-token');
     });
 
-    it('falls back to re-validating the currently configured DHAN_ACCESS_TOKEN when RenewToken rejects an already-expired session token', async () => {
-      httpClient.request.mockImplementation((req: BrokerHttpRequest) =>
-        Promise.resolve(
-          req.url.endsWith('/RenewToken')
-            ? { status: 400, body: { errorMessage: 'Token already expired' } }
-            : { status: 200, body: {} },
-        ),
+    it('throws BrokerSessionExpiredException when RenewToken rejects an already-expired session token, instead of falling back to the static env token (per DhanHQ docs: RenewToken only works on active tokens)', async () => {
+      httpClient.request.mockResolvedValue({
+        status: 400,
+        body: { errorMessage: 'Token already expired' },
+      });
+
+      await expect(auth.refresh(existingSession(-1))).rejects.toThrow(
+        BrokerSessionExpiredException,
       );
-
-      const refreshed = await auth.refresh(existingSession(-1));
-
-      expect(refreshed.clientCode).toBe('C123');
-      expect(refreshed.token.getAccessToken()).toBe('configured-access-token');
+      // The stale env token must never be consulted once a real session
+      // existed and its renewal failed — only one HTTP call (RenewToken).
+      expect(httpClient.request).toHaveBeenCalledTimes(1);
     });
 
-    it('fails when both RenewToken and the configured-token fallback are rejected', async () => {
+    it('throws BrokerSessionExpiredException for any other RenewToken rejection too, never re-validating the configured token as a fallback', async () => {
       httpClient.request.mockResolvedValue({
         status: 401,
         body: { errorMessage: 'Invalid Access Token' },
       });
 
       await expect(auth.refresh(existingSession(-1))).rejects.toThrow(
-        InvalidCredentialsException,
+        BrokerSessionExpiredException,
+      );
+      expect(httpClient.request).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('login with an override token', () => {
+    it('uses the override access token instead of the configured one — the manual reconnect flow', async () => {
+      httpClient.request.mockResolvedValue({ status: 200, body: {} });
+
+      await auth.login('freshly-pasted-token');
+
+      expect(httpClient.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'access-token': 'freshly-pasted-token',
+          }),
+        }),
       );
     });
   });

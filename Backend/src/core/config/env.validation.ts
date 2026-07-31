@@ -28,6 +28,10 @@ export interface EnvironmentVariables {
   GOOGLE_REDIRECT_URI: string;
   EMAIL_FROM: string;
   EMAIL_FROM_NAME: string;
+  /** Persistent-disk mount path for the auto-bootstrapped TOKEN_ENCRYPTION_KEY file — see src/bootstrap/encryption-key-bootstrap.ts. Optional; only consulted when TOKEN_ENCRYPTION_KEY itself isn't set directly. */
+  SECRETS_DIR: string;
+  /** How often BrokerTokenRenewalScheduler proactively calls RenewToken while in LIVE mode, well inside the 24h token lifetime. Optional, sane default. */
+  BROKER_TOKEN_RENEWAL_INTERVAL_MS: number;
 }
 
 // Always required, regardless of trading mode — the app has no safe default
@@ -320,6 +324,30 @@ export function validateEnv(
     }
   }
 
+  const secretsDirRaw = config.SECRETS_DIR;
+  const secretsDir =
+    typeof secretsDirRaw === 'string' ? secretsDirRaw.trim() : '';
+
+  const brokerTokenRenewalIntervalRaw = config.BROKER_TOKEN_RENEWAL_INTERVAL_MS;
+  const brokerTokenRenewalIntervalMs =
+    brokerTokenRenewalIntervalRaw === undefined ||
+    brokerTokenRenewalIntervalRaw === ''
+      ? 6 * 60 * 60 * 1000
+      : Number(brokerTokenRenewalIntervalRaw);
+  if (
+    !Number.isInteger(brokerTokenRenewalIntervalMs) ||
+    brokerTokenRenewalIntervalMs <= 0
+  ) {
+    errors.push('BROKER_TOKEN_RENEWAL_INTERVAL_MS must be a positive integer');
+  }
+
+  // MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER are deprecated: provider
+  // selection now comes exclusively from TradingModeService's runtime mode
+  // (PAPER always MOCK, LIVE always DHAN — never independently configurable,
+  // which is what let the two disagree in the first place). Still accepted
+  // here (shape-validated below, same as before) so an existing deployment's
+  // env config never fails validation on upgrade; a startup warning is
+  // logged separately (see config.service.ts) if either is explicitly set.
   const killSwitchRaw = config.KILL_SWITCH_ENABLED;
   const killSwitchEnabled =
     typeof killSwitchRaw === 'string' && killSwitchRaw.toLowerCase() === 'true';
@@ -454,5 +482,7 @@ export function validateEnv(
     GOOGLE_REDIRECT_URI: (config.GOOGLE_REDIRECT_URI as string) ?? '',
     EMAIL_FROM: (config.EMAIL_FROM as string) ?? '',
     EMAIL_FROM_NAME: (config.EMAIL_FROM_NAME as string) ?? '',
+    SECRETS_DIR: secretsDir,
+    BROKER_TOKEN_RENEWAL_INTERVAL_MS: brokerTokenRenewalIntervalMs,
   };
 }

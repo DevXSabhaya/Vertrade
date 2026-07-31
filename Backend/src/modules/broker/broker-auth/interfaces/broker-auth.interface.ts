@@ -6,7 +6,13 @@ import type { BrokerSession } from '../entities/broker-session.entity';
  * broker-auth adapter can be added without touching any consumer.
  */
 export interface IBrokerAuth {
-  login(): Promise<BrokerSession>;
+  /**
+   * @param overrideAccessToken When provided (the manual reconnect flow —
+   * an operator pasting a freshly console-generated token), this token is
+   * used instead of the configured `DHAN_ACCESS_TOKEN` env value. Additive:
+   * every existing caller passing nothing keeps its current behavior.
+   */
+  login(overrideAccessToken?: string): Promise<BrokerSession>;
   refresh(session: BrokerSession): Promise<BrokerSession>;
   logout(session: BrokerSession): Promise<void>;
   /** Local, network-free expiry check — remote health checks are Broker Health Monitor's job (a later phase). */

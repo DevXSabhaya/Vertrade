@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '@modules/auth/auth.module';
 import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
 import { BrokerHealthModule } from '@modules/broker-health/broker-health.module';
+import { InstrumentMasterModule } from '@modules/instrument-master/instrument-master.module';
 import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { AppConfigController } from './app-config.controller';
 
@@ -18,6 +19,7 @@ import { AppConfigController } from './app-config.controller';
     AuthModule,
     BrokerAuthModule,
     BrokerHealthModule,
+    InstrumentMasterModule,
     TradingModeModule,
   ],
   controllers: [AppConfigController],

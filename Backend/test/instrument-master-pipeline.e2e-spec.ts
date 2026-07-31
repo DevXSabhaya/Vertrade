@@ -3,7 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import { getConnectionToken } from '@nestjs/mongoose';
 import type { Connection } from 'mongoose';
 import { AppModule } from '../src/app.module';
-import { INSTRUMENT_MASTER_PROVIDER } from '../src/modules/instrument-master/instrument-master.constants';
+import { MOCK_INSTRUMENT_MASTER_PROVIDER } from '../src/modules/instrument-master/instrument-master.constants';
 import { InstrumentMasterService } from '../src/modules/instrument-master/instrument-master.service';
 import { InstrumentResolverService } from '../src/modules/instrument-resolver/instrument-resolver.service';
 import { Instrument } from '../src/modules/instrument-master/entities/instrument.entity';
@@ -61,7 +61,7 @@ describe('Instrument master pipeline (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(INSTRUMENT_MASTER_PROVIDER)
+      .overrideProvider(MOCK_INSTRUMENT_MASTER_PROVIDER)
       .useValue(stubProvider)
       .compile();
 
@@ -76,8 +76,14 @@ describe('Instrument master pipeline (e2e)', () => {
   });
 
   afterAll(async () => {
+    // RecoverySnapshotService debounces a real Mongo write up to
+    // RECOVERY_CONFIG.snapshotDebounceMs (2s) after the last domain event —
+    // let any pending debounced write land before closing the Mongo
+    // connection (same pattern already used elsewhere in this file for
+    // async audit writes).
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
     await app.close();
-  });
+  }, 15_000);
 
   it('loads the instrument master into the in-memory cache via refresh(), without calling the real broker', () => {
     const masterService = app.get(InstrumentMasterService);
