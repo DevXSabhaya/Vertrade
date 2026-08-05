@@ -27,19 +27,27 @@ export function useInstrumentExpiries(query: string): UseInstrumentExpiriesResul
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = query.trim()
-      if (trimmed.length === 0) {
-        setChoices([])
-        setError(null)
-        setIsResolving(false)
-        return
-      }
+  // Reset synchronously during render (not in an effect body) the instant
+  // `query` changes — the same "adjusting state when a prop changes"
+  // pattern used elsewhere in this app (see NewTrade/PriceChart). Without
+  // this, the previous query's `choices` kept rendering as current for the
+  // ~400ms gap between an edit and the debounced request below actually
+  // firing, with no signal that the data was stale.
+  const [trackedQuery, setTrackedQuery] = useState(query)
+  if (query !== trackedQuery) {
+    setTrackedQuery(query)
+    setChoices([])
+    setError(null)
+    setIsResolving(query.trim().length > 0)
+  }
 
-      setIsResolving(true)
-      setChoices([])
-      setError(null)
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (trimmed.length === 0) {
+      return
+    }
+
+    const timer = setTimeout(() => {
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
