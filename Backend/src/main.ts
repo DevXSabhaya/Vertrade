@@ -12,7 +12,6 @@ import { GlobalExceptionFilter } from '@common/filters/global-exception.filter';
 import { createCorsOriginValidator } from '@core/config/cors-origin.util';
 import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import { MarketDataService } from '@modules/market-data/market-data.service';
-import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { bootstrapEncryptionKey } from './bootstrap/encryption-key-bootstrap';
 
 async function bootstrap(): Promise<void> {
@@ -56,13 +55,6 @@ async function bootstrap(): Promise<void> {
   );
 
   const configService = app.get(ConfigService);
-
-  if (configService.hasDeprecatedProviderOverride) {
-    logger.warn(
-      'MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER are deprecated and now ignored — provider selection is derived exclusively from the trading mode (PAPER always uses MOCK, LIVE always uses DHAN). Remove these env vars; they no longer have any effect.',
-      'Bootstrap',
-    );
-  }
 
   // Environment-aware, explicit-allow-list CORS (Phase 13 fix):
   //  - Every environment trusts exactly the origin(s) in FRONTEND_URL
@@ -116,48 +108,45 @@ async function bootstrap(): Promise<void> {
   // are caught and logged rather than left as unhandled rejections, since
   // nothing here may ever fail the process once boot has already succeeded.
   //
-  // Provider selection now comes exclusively from TradingModeService's
-  // persisted, runtime-switchable mode (bootstrap-once from TRADING_MODE on
-  // true first boot, never re-read from env after that) — never from the
-  // now-deprecated MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER env vars,
-  // which are no longer wired to provider selection at all.
-  const tradingModeService = app.get(TradingModeService);
-  if (tradingModeService.getCurrentMode() === 'PAPER') {
-    // Mock providers are entirely in-memory (no network call) and cheap
-    // either way — still deferred so they can never be the reason the HTTP
-    // port opens late.
-    app
-      .get(InstrumentMasterService)
-      .refresh()
-      .then(() => {
-        logger.log(
-          'Instrument master cache populated from MockInstrumentMasterProvider',
-          'Bootstrap',
-        );
-      })
-      .catch((error: unknown) => {
-        logger.error(
-          `Instrument master warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-          'Bootstrap',
-        );
-      });
+  // Market Data and Instrument Master are wired to a single provider
+  // (`ConfigService.marketDataProvider`/`instrumentMasterProvider`) that is
+  // completely independent of Trading Mode (Core Architecture Principle #1/
+  // #2/#5) — they are started unconditionally here, regardless of whether
+  // this deployment's current mode is PAPER or LIVE, so Paper trading always
+  // has real prices flowing without requiring a broker session, and a LIVE
+  // deployment's feed is never left unstarted waiting on a mode-specific
+  // bootstrap hook that may never fire for it.
+  app
+    .get(InstrumentMasterService)
+    .refresh()
+    .then(() => {
+      logger.log('Instrument master cache populated', 'Bootstrap');
+    })
+    .catch((error: unknown) => {
+      logger.error(
+        `Instrument master warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        'Bootstrap',
+      );
+    });
 
-    app
-      .get(MarketDataService)
-      .start()
-      .then(() => {
-        logger.log('Market data started (MockMarketDataProvider)', 'Bootstrap');
-      })
-      .catch((error: unknown) => {
-        logger.error(
-          `Market data warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-          'Bootstrap',
-        );
-      });
-  }
-  // LIVE-mode broker authentication + Dhan-sourced provider startup is
-  // handled by TradingModeService's own OnApplicationBootstrap hook (only
-  // once mode is confirmed LIVE), not here — see trading-mode.service.ts.
+  app
+    .get(MarketDataService)
+    .start()
+    .then(() => {
+      logger.log('Market data started', 'Bootstrap');
+    })
+    .catch((error: unknown) => {
+      logger.error(
+        `Market data warm-up failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        'Bootstrap',
+      );
+    });
+
+  // LIVE-mode broker session authentication (needed only for order
+  // execution) already ran as part of TradingModeService's onModuleInit
+  // hook, before NestFactory.create() resolved above — see
+  // trading-mode.service.ts. It is independent of the market-data/
+  // instrument-master warm-up above.
 }
 
 bootstrap().catch((error: unknown) => {

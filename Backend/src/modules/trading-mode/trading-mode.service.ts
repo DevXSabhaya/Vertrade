@@ -1,18 +1,10 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnApplicationBootstrap,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { ConfigService } from '@core/config/config.service';
 import { SettingsService } from '@modules/settings/settings.service';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { BrokerTokenRenewalScheduler } from '@modules/broker/broker-auth/broker-token-renewal.scheduler';
-import { MarketDataService } from '@modules/market-data/market-data.service';
-import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import { BusinessException } from '@common/exceptions/business.exception';
 import type { TradingMode } from '@modules/trade-lifecycle/models/trade-record.model';
 import { TradingModeChangedEvent } from './events/trading-mode-changed.event';
@@ -25,8 +17,12 @@ export const TRADING_MODE_SETTING_KEY = 'TRADING_MODE_OVERRIDE';
 /**
  * The single source of truth for "what trading mode is this deployment in
  * right now", AND the single orchestrator of everything that must change
- * atomically when that mode switches: the broker session, the active
- * market-data provider, and the active instrument-master provider.
+ * when that mode switches — which, per Core Architecture Principle #4, is
+ * ONLY order execution and the broker session that supports it. Market Data
+ * and Instrument Master are never touched here: they are wired to a single
+ * provider independent of trading mode (see MarketDataModule /
+ * InstrumentMasterModule), so Paper and Live always observe identical prices
+ * and instruments (Principle #5).
  *
  * `TRADING_MODE` (env) is consulted only as the bootstrap seed for the very
  * first boot ever — `onModuleInit` persists it into Settings exactly once
@@ -38,22 +34,14 @@ export const TRADING_MODE_SETTING_KEY = 'TRADING_MODE_OVERRIDE';
  * calling `onModuleInit`); once persisted, Settings' cache always has a
  * value.
  *
- * Mode switching is atomic: `setMode` runs a prepare-then-commit sequence.
- * Prepare (broker session establishment for LIVE, connecting the target
- * market-data provider, fetching from the target instrument-master
- * provider) touches nothing externally visible — a failure at this stage
- * leaves mode, providers, and session exactly as they were. Commit (persist
- * mode, swap the instrument cache, flip the active market-data provider,
- * start/stop the token-renewal scheduler, tear down the broker session on a
- * switch to PAPER) is a tight synchronous sequence with no possibility of a
- * consumer observing a mix of old-mode and new-mode state. A single-flight
- * guard (`pendingSwitch`) ensures concurrent `setMode` calls never run two
- * prepare/commit sequences at once — they collapse onto one real switch.
+ * Mode switching is atomic: `setMode` persists the new mode and then
+ * establishes/tears down the broker session used for LIVE order execution.
+ * A single-flight guard (`pendingSwitch`) ensures concurrent `setMode` calls
+ * never run two switch sequences at once — they collapse onto one real
+ * switch.
  */
 @Injectable()
-export class TradingModeService
-  implements OnModuleInit, OnApplicationBootstrap
-{
+export class TradingModeService implements OnModuleInit {
   private readonly logger = new Logger(TradingModeService.name);
   private pendingSwitch: Promise<TradingMode> | null = null;
 
@@ -62,8 +50,6 @@ export class TradingModeService
     private readonly configService: ConfigService,
     private readonly brokerSessionManager: BrokerSessionManager,
     private readonly brokerTokenRenewalScheduler: BrokerTokenRenewalScheduler,
-    private readonly marketDataService: MarketDataService,
-    private readonly instrumentMasterService: InstrumentMasterService,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
   ) {}
 
@@ -76,30 +62,8 @@ export class TradingModeService
         'system:bootstrap',
       );
     }
-  }
 
-  /**
-   * Runs once, after every module's onModuleInit has completed (Nest
-   * guarantee) — restores runtime state after a restart/redeploy without
-   * any operator action: corrects MarketDataService/InstrumentMasterService's
-   * default (MOCK) active provider to match the persisted mode, triggers a
-   * corrective instrument-master refresh if the restored backup came from
-   * the wrong source, and — only for LIVE — authenticates completely before
-   * NestFactory.create() resolves (main.ts awaits this before app.listen(),
-   * so LIVE mode never accepts a connection while unauthenticated; slower
-   * boot in LIVE mode is an accepted, deliberate tradeoff for that
-   * guarantee). Never throws: a failed LIVE bootstrap leaves the deployment
-   * in REAUTH_REQUIRED rather than crashing the process.
-   */
-  async onApplicationBootstrap(): Promise<void> {
-    const mode = this.getCurrentMode();
-    this.marketDataService.initializeForMode(mode);
-    this.instrumentMasterService.initializeForMode(mode);
-    this.instrumentMasterService
-      .refreshIfSourceMismatch(mode)
-      .catch(() => undefined);
-
-    if (mode === 'LIVE') {
+    if (this.getCurrentMode() === 'LIVE') {
       try {
         await this.brokerSessionManager.bootstrapLiveSession();
       } catch (error) {
@@ -123,11 +87,10 @@ export class TradingModeService
   }
 
   /**
-   * Switches the deployment's current mode via an atomic prepare/commit
-   * sequence (see class docstring). A single-flight guard collapses
-   * concurrent calls: identical-target calls share one real switch;
-   * different-target calls run strictly after the in-flight one finishes
-   * (never interleaved), regardless of whether that prior attempt
+   * Switches which executor new orders route through. A single-flight guard
+   * collapses concurrent calls: identical-target calls share one real
+   * switch; different-target calls run strictly after the in-flight one
+   * finishes (never interleaved), regardless of whether that prior attempt
    * succeeded or failed.
    */
   async setMode(mode: TradingMode, changedBy: string): Promise<TradingMode> {
@@ -155,35 +118,11 @@ export class TradingModeService
     previousMode: TradingMode,
     changedBy: string,
   ): Promise<TradingMode> {
-    // --- PREPARE: nothing externally visible changes yet ---
     if (mode === 'LIVE') {
       await this.assertLiveModeIsSafe();
     }
 
-    await this.marketDataService.prepareProviderForMode(mode);
-
-    let instruments;
-    try {
-      instruments =
-        await this.instrumentMasterService.prepareRefreshForMode(mode);
-    } catch (error) {
-      if (error instanceof BrokerSessionExpiredException) {
-        instruments = undefined;
-      } else {
-        await this.marketDataService
-          .abortPreparedProvider(mode)
-          .catch(() => undefined);
-        throw this.wrapSwitchFailure(mode, error);
-      }
-    }
-
-    // --- COMMIT: tight synchronous sequence, mode/providers/session flip together ---
     await this.settingsService.set(TRADING_MODE_SETTING_KEY, mode, changedBy);
-    await this.instrumentMasterService.commitInstrumentSwitch(
-      mode,
-      instruments,
-    );
-    await this.marketDataService.commitProviderSwitch(mode);
 
     if (mode === 'LIVE') {
       this.brokerTokenRenewalScheduler.start();
@@ -228,13 +167,5 @@ export class TradingModeService
         `Cannot switch to LIVE mode: broker authentication failed (${reason}).`,
       );
     }
-  }
-
-  private wrapSwitchFailure(
-    mode: TradingMode,
-    error: unknown,
-  ): BusinessException {
-    const reason = error instanceof Error ? error.message : 'unknown error';
-    return new BusinessException(`Cannot switch to ${mode} mode: ${reason}.`);
   }
 }

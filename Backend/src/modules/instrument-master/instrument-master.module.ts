@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from '@core/config/config.module';
+import { ConfigService } from '@core/config/config.service';
 import { HTTP_CLIENT } from '@shared/http/http-client.constants';
 import { FetchHttpClient } from '@shared/http/fetch-http-client';
 import { DhanInstrumentMasterProvider } from '@modules/broker/dhan/dhan-instrument-master.provider';
@@ -16,15 +17,19 @@ import { MockInstrumentMasterProvider } from './providers/mock-instrument-master
 import {
   MOCK_INSTRUMENT_MASTER_PROVIDER,
   DHAN_INSTRUMENT_MASTER_PROVIDER,
+  PRIMARY_INSTRUMENT_MASTER_PROVIDER,
   INSTRUMENT_REPOSITORY,
 } from './instrument-master.constants';
+import type { IInstrumentMasterProvider } from './interfaces/instrument-master-provider.interface';
 
 /**
  * Both MockInstrumentMasterProvider and DhanInstrumentMasterProvider are
- * always constructed (ordinary Nest singletons) — this module's providers
- * only ever *instantiate*, never decide which is active. Runtime selection
- * lives entirely inside InstrumentMasterService, driven by
- * TradingModeService.
+ * always constructed (ordinary Nest singletons); which one
+ * `InstrumentMasterService` actually depends on is decided once, here, at
+ * module-wiring time, from `ConfigService.instrumentMasterProvider` — never
+ * at runtime, and never driven by TradingModeService (Core Architecture
+ * Principle #2: the instrument universe never switches based on Trading
+ * Mode).
  */
 @Module({
   imports: [
@@ -45,6 +50,23 @@ import {
     {
       provide: DHAN_INSTRUMENT_MASTER_PROVIDER,
       useExisting: DhanInstrumentMasterProvider,
+    },
+    {
+      provide: PRIMARY_INSTRUMENT_MASTER_PROVIDER,
+      // Injected via the MOCK_/DHAN_ tokens, not the concrete classes
+      // directly — so a test's `.overrideProvider(MOCK_INSTRUMENT_MASTER_PROVIDER)`
+      // (or any future runtime rebinding) is actually observed here.
+      inject: [
+        ConfigService,
+        MOCK_INSTRUMENT_MASTER_PROVIDER,
+        DHAN_INSTRUMENT_MASTER_PROVIDER,
+      ],
+      useFactory: (
+        configService: ConfigService,
+        mock: IInstrumentMasterProvider,
+        dhan: IInstrumentMasterProvider,
+      ): IInstrumentMasterProvider =>
+        configService.instrumentMasterProvider === 'DHAN' ? dhan : mock,
     },
     { provide: INSTRUMENT_REPOSITORY, useClass: InstrumentMasterRepository },
     InstrumentCache,

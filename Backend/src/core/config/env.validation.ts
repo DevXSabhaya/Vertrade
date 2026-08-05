@@ -188,17 +188,18 @@ export function validateEnv(
     errors.push('TRADING_MODE must be either PAPER or LIVE');
   }
 
-  // Defaulting these to a flat 'MOCK' regardless of TRADING_MODE let a real
-  // LIVE deployment silently run on synthetic/mock instrument and price data
-  // whenever an operator forgot to also set these two — indistinguishable
-  // from real Dhan data to both the operator and the frontend. Only the
-  // *default* (unset) case is tied to TRADING_MODE; an explicit override
-  // still wins either way, e.g. pointing a LIVE deployment's market data at
-  // MOCK for a rehearsal remains possible if deliberately configured.
+  // Market Data and Instrument Master are completely independent of Trading
+  // Mode (Core Architecture Principles #1/#2/#5) — Paper and Live always use
+  // identical, real market data, so the *default* (unset) case is tied to
+  // NODE_ENV, not TRADING_MODE: a real production deployment must never
+  // silently run on synthetic/mock data just because it happens to be in
+  // Paper mode. An explicit override still wins either way, e.g. pointing a
+  // production deployment's market data at MOCK for a rehearsal remains
+  // possible if deliberately configured.
   const marketDataProviderRaw = config.MARKET_DATA_PROVIDER;
   const marketDataProvider =
     marketDataProviderRaw === undefined || marketDataProviderRaw === ''
-      ? tradingMode === 'LIVE'
+      ? nodeEnv === 'production'
         ? 'DHAN'
         : 'MOCK'
       : marketDataProviderRaw;
@@ -210,7 +211,7 @@ export function validateEnv(
   const instrumentMasterProvider =
     instrumentMasterProviderRaw === undefined ||
     instrumentMasterProviderRaw === ''
-      ? tradingMode === 'LIVE'
+      ? nodeEnv === 'production'
         ? 'DHAN'
         : 'MOCK'
       : instrumentMasterProviderRaw;
@@ -218,15 +219,22 @@ export function validateEnv(
     errors.push('INSTRUMENT_MASTER_PROVIDER must be either MOCK or DHAN');
   }
 
-  // Real broker credentials are only ever a hard requirement once LIVE
-  // trading is explicitly selected — a Paper-only deployment must boot
-  // cleanly with none of these set.
-  if (tradingMode === 'LIVE') {
+  // Real Dhan credentials are required whenever anything in this deployment
+  // will actually talk to Dhan: LIVE order execution (TRADING_MODE=LIVE), OR
+  // the market-data/instrument-master feeds resolving to DHAN (the default
+  // in production, per Principle #1/#2/#5 — real data regardless of trading
+  // mode). A Paper-only, non-production deployment must still boot cleanly
+  // with none of these set (both provider defaults fall back to MOCK there).
+  const requiresDhanCredentials =
+    tradingMode === 'LIVE' ||
+    marketDataProvider === 'DHAN' ||
+    instrumentMasterProvider === 'DHAN';
+  if (requiresDhanCredentials) {
     for (const key of LIVE_MODE_REQUIRED_STRING_KEYS) {
       const value = config[key];
       if (typeof value !== 'string' || value.trim() === '') {
         errors.push(
-          `${key} is required when TRADING_MODE=LIVE and must be a non-empty string`,
+          `${key} is required when TRADING_MODE=LIVE or MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER=DHAN, and must be a non-empty string`,
         );
       } else if (looksLikePlaceholder(value)) {
         // Phase 21 hardening: real money can move once TRADING_MODE=LIVE —
@@ -234,7 +242,7 @@ export function validateEnv(
         // exact value this repo's own .env.example ships for Paper-only
         // local dev) must never be silently accepted as if it were real.
         errors.push(
-          `${key} looks like a placeholder value — TRADING_MODE=LIVE requires a real Dhan credential, not a placeholder`,
+          `${key} looks like a placeholder value — a real Dhan credential is required, not a placeholder`,
         );
       }
     }
@@ -341,13 +349,6 @@ export function validateEnv(
     errors.push('BROKER_TOKEN_RENEWAL_INTERVAL_MS must be a positive integer');
   }
 
-  // MARKET_DATA_PROVIDER/INSTRUMENT_MASTER_PROVIDER are deprecated: provider
-  // selection now comes exclusively from TradingModeService's runtime mode
-  // (PAPER always MOCK, LIVE always DHAN — never independently configurable,
-  // which is what let the two disagree in the first place). Still accepted
-  // here (shape-validated below, same as before) so an existing deployment's
-  // env config never fails validation on upgrade; a startup warning is
-  // logged separately (see config.service.ts) if either is explicitly set.
   const killSwitchRaw = config.KILL_SWITCH_ENABLED;
   const killSwitchEnabled =
     typeof killSwitchRaw === 'string' && killSwitchRaw.toLowerCase() === 'true';

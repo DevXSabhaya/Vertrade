@@ -2,15 +2,13 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
-import type { TradingMode } from '@modules/trading-engine/domain/trading-mode.type';
-import type { Instrument } from './entities/instrument.entity';
+import { ConfigService } from '@core/config/config.service';
 import {
   InstrumentCache,
   type InstrumentCacheSnapshot,
 } from './instrument-master.cache';
 import {
-  MOCK_INSTRUMENT_MASTER_PROVIDER,
-  DHAN_INSTRUMENT_MASTER_PROVIDER,
+  PRIMARY_INSTRUMENT_MASTER_PROVIDER,
   INSTRUMENT_REPOSITORY,
 } from './instrument-master.constants';
 import type { IInstrumentMasterProvider } from './interfaces/instrument-master-provider.interface';
@@ -18,13 +16,13 @@ import type {
   IInstrumentRepository,
   InstrumentSourceProvider,
 } from './interfaces/instrument-repository.interface';
+import type { Instrument } from './entities/instrument.entity';
 import { InstrumentMasterEmptyException } from './exceptions/instrument-master-empty.exception';
 import { InstrumentMasterLoadingStartedEvent } from './events/instrument-master-loading-started.event';
 import { InstrumentMasterLoadedEvent } from './events/instrument-master-loaded.event';
 import { InstrumentMasterRefreshStartedEvent } from './events/instrument-master-refresh-started.event';
 import { InstrumentMasterRefreshCompletedEvent } from './events/instrument-master-refresh-completed.event';
 import { InstrumentMasterRefreshFailedEvent } from './events/instrument-master-refresh-failed.event';
-import { BrokerLoginSucceededEvent } from '@modules/broker/broker-auth/events/broker-login-succeeded.event';
 
 /**
  * Orchestrates loading and refreshing the instrument master. Never touches
@@ -32,35 +30,35 @@ import { BrokerLoginSucceededEvent } from '@modules/broker/broker-auth/events/br
  * and never blocks the resolver's reads: the cache is the only thing
  * InstrumentResolverService talks to.
  *
- * Owns PAPER/LIVE provider switching itself (Mock and Dhan providers are
- * both ordinary Nest singletons, injected directly) — mirrors
- * MarketDataService's pattern. Driven exclusively by TradingModeService;
- * does NOT depend on TradingModeService itself (that would be a circular
- * module dependency, since TradingModeModule depends on this module).
+ * Depends only on `IInstrumentMasterProvider` (bound once, at module-wiring
+ * time, to whichever concrete provider `ConfigService.instrumentMasterProvider`
+ * selects). Instrument Master never switches based on Trading Mode (Core
+ * Architecture Principle #2) — Paper and Live always resolve against the
+ * exact same instrument universe.
  */
 @Injectable()
 export class InstrumentMasterService implements OnModuleInit {
   private readonly logger = new Logger(InstrumentMasterService.name);
-  private activeProviderType: InstrumentSourceProvider = 'MOCK';
-  private lastLoadedSourceProvider: InstrumentSourceProvider | null = null;
+  private readonly sourceProvider: InstrumentSourceProvider;
 
   constructor(
-    @Inject(MOCK_INSTRUMENT_MASTER_PROVIDER)
-    private readonly mockProvider: IInstrumentMasterProvider,
-    @Inject(DHAN_INSTRUMENT_MASTER_PROVIDER)
-    private readonly dhanProvider: IInstrumentMasterProvider,
+    @Inject(PRIMARY_INSTRUMENT_MASTER_PROVIDER)
+    private readonly provider: IInstrumentMasterProvider,
     @Inject(INSTRUMENT_REPOSITORY)
     private readonly repository: IInstrumentRepository,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
     private readonly cache: InstrumentCache,
-  ) {}
+    configService: ConfigService,
+  ) {
+    this.sourceProvider = configService.instrumentMasterProvider;
+  }
 
   /**
    * Startup is network-free by design: only the MongoDB backup (fast, local)
    * is loaded here. The live broker download only ever happens via refresh()
-   * — invoked manually, on the daily cron, or by a future Scheduler's
-   * Morning Startup routine — so process boot never blocks on, or depends
-   * on, external network availability.
+   * — invoked manually, on the daily cron, or by the Scheduler's Morning
+   * Startup routine — so process boot never blocks on, or depends on,
+   * external network availability.
    */
   async onModuleInit(): Promise<void> {
     this.eventBus.publish(new InstrumentMasterLoadingStartedEvent());
@@ -68,7 +66,6 @@ export class InstrumentMasterService implements OnModuleInit {
     const backup = await this.repository.findLatestSnapshot().catch(() => null);
     if (backup && backup.instruments.length > 0) {
       this.cache.swap(backup.instruments);
-      this.lastLoadedSourceProvider = backup.sourceProvider;
       const snapshot = this.cache.getSnapshot();
       this.eventBus.publish(
         new InstrumentMasterLoadedEvent(
@@ -76,77 +73,31 @@ export class InstrumentMasterService implements OnModuleInit {
           snapshot.instrumentCount,
         ),
       );
+      if (backup.sourceProvider !== this.sourceProvider) {
+        // The restored backup came from a different source than this
+        // deployment is currently configured for — trigger an immediate
+        // corrective refresh rather than trusting a possibly-wrong-source
+        // cache. Fire-and-forget: must never delay process boot.
+        this.refresh().catch((error: unknown) => {
+          this.logger.warn(
+            `Instrument master provenance mismatch (backup was ${String(backup.sourceProvider)}, expected ${this.sourceProvider}) and the corrective refresh failed: ${this.describeError(error)}`,
+          );
+        });
+      }
     } else {
       this.logger.warn(
         'No instrument master backup available at startup; call refresh() to load one.',
       );
     }
-
-    this.eventBus.subscribe<BrokerLoginSucceededEvent>(
-      'broker.login.succeeded',
-      () => {
-        void this.handleBrokerLogin();
-      },
-    );
   }
 
-  private async handleBrokerLogin(): Promise<void> {
-    if (this.activeProviderType === 'DHAN') {
-      try {
-        const instruments = await this.prepareRefreshForMode('LIVE');
-        await this.commitInstrumentSwitch('LIVE', instruments);
-      } catch (error) {
-        this.logger.error(
-          `Failed to automatically refresh instrument master on broker login: ${
-            error instanceof Error ? error.message : 'unknown error'
-          }`,
-        );
-      }
-    }
-  }
-
-  /**
-   * Sets the initial active provider from the persisted trading mode,
-   * before any switch has ever happened. Called once by TradingModeService's
-   * OnApplicationBootstrap hook, which runs after this service's own
-   * onModuleInit (so the restored backup's provenance is already known).
-   */
-  initializeForMode(mode: TradingMode): void {
-    this.activeProviderType = this.typeForMode(mode);
-  }
-
-  /**
-   * If the backup restored at boot came from the wrong provider for the
-   * current mode (or predates this field entirely — null, treated as
-   * unknown/stale), triggers an immediate refresh from the correct source
-   * rather than trusting a possibly-wrong-source cache. Deliberately
-   * fire-and-forget from the caller's perspective (network call, must never
-   * delay the HTTP port opening) — callers should not await this inline
-   * with process boot.
-   */
-  async refreshIfSourceMismatch(mode: TradingMode): Promise<void> {
-    const expected = this.typeForMode(mode);
-    if (this.lastLoadedSourceProvider === expected) {
-      return;
-    }
-    // Defensive: correct the active pointer here too, regardless of
-    // whether initializeForMode(mode) was already called for this mode —
-    // refresh() always uses whatever the active provider currently is.
-    this.activeProviderType = expected;
-    await this.refresh().catch((error: unknown) => {
-      this.logger.warn(
-        `Instrument master provenance mismatch (expected ${expected}, had ${String(this.lastLoadedSourceProvider)}) and the corrective refresh failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    });
-  }
-
-  /** Runs once daily; also invoked directly for manual refresh. Always refreshes from the currently active provider. */
+  /** Runs once daily; also invoked directly for manual refresh. */
   @Cron('0 8 * * *')
   async refresh(): Promise<InstrumentCacheSnapshot> {
     this.eventBus.publish(new InstrumentMasterRefreshStartedEvent());
 
     try {
-      const instruments = await this.activeProvider().fetchInstruments();
+      const instruments = await this.provider.fetchInstruments();
       if (instruments.length === 0) {
         throw new InstrumentMasterEmptyException(
           'Instrument master fetch returned zero instruments',
@@ -154,7 +105,7 @@ export class InstrumentMasterService implements OnModuleInit {
       }
 
       const snapshot = this.cache.swap(instruments);
-      await this.persistBackup(instruments, snapshot, this.activeProviderType);
+      await this.persistBackup(instruments, snapshot);
 
       this.eventBus.publish(
         new InstrumentMasterRefreshCompletedEvent(
@@ -169,37 +120,6 @@ export class InstrumentMasterService implements OnModuleInit {
       );
       throw error;
     }
-  }
-
-  /**
-   * Prepare phase of an atomic mode switch: fetches from the target
-   * provider WITHOUT touching the cache — invisible to every consumer
-   * until commitInstrumentSwitch runs.
-   */
-  async prepareRefreshForMode(mode: TradingMode): Promise<Instrument[]> {
-    const targetType = this.typeForMode(mode);
-    const instruments =
-      await this.providerOfType(targetType).fetchInstruments();
-    if (instruments.length === 0) {
-      throw new InstrumentMasterEmptyException(
-        'Instrument master fetch returned zero instruments',
-      );
-    }
-    return instruments;
-  }
-
-  /** Commit phase: atomically swaps the cache and flips the active provider together. */
-  async commitInstrumentSwitch(
-    mode: TradingMode,
-    instruments?: Instrument[],
-  ): Promise<void> {
-    const targetType = this.typeForMode(mode);
-    if (instruments) {
-      const snapshot = this.cache.swap(instruments);
-      await this.persistBackup(instruments, snapshot, targetType);
-    }
-    this.activeProviderType = targetType;
-    this.lastLoadedSourceProvider = targetType;
   }
 
   getCache(): InstrumentCache {
@@ -217,29 +137,14 @@ export class InstrumentMasterService implements OnModuleInit {
   private async persistBackup(
     instruments: Instrument[],
     snapshot: InstrumentCacheSnapshot,
-    sourceProvider: InstrumentSourceProvider,
   ): Promise<void> {
     await this.repository
-      .saveSnapshot(instruments, snapshot.version, sourceProvider)
+      .saveSnapshot(instruments, snapshot.version, this.sourceProvider)
       .catch((error: unknown) => {
         this.logger.warn(
           `Failed to persist instrument master backup: ${this.describeError(error)}`,
         );
       });
-  }
-
-  private typeForMode(mode: TradingMode): InstrumentSourceProvider {
-    return mode === 'LIVE' ? 'DHAN' : 'MOCK';
-  }
-
-  private providerOfType(
-    type: InstrumentSourceProvider,
-  ): IInstrumentMasterProvider {
-    return type === 'DHAN' ? this.dhanProvider : this.mockProvider;
-  }
-
-  private activeProvider(): IInstrumentMasterProvider {
-    return this.providerOfType(this.activeProviderType);
   }
 
   private describeError(error: unknown): string {

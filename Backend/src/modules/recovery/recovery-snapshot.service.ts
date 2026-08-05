@@ -172,7 +172,11 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
       this.debounceHandle = null;
     }
     if (this.activeWritePromises.size > 0) {
-      await Promise.all(Array.from(this.activeWritePromises).map((p) => p.catch(() => undefined)));
+      await Promise.all(
+        Array.from(this.activeWritePromises).map((p) =>
+          p.catch(() => undefined),
+        ),
+      );
     }
   }
 }

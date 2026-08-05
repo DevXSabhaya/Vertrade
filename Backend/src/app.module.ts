@@ -16,6 +16,7 @@ import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module
 import { InstrumentMasterModule } from '@modules/instrument-master/instrument-master.module';
 import { InstrumentResolverModule } from '@modules/instrument-resolver/instrument-resolver.module';
 import { ExecutorsModule } from '@modules/broker/executors/executors.module';
+import { BrokerRegistryModule } from '@modules/broker/registry/broker-registry.module';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
 import { TradeValidationModule } from '@modules/trade-validation/trade-validation.module';
@@ -63,6 +64,7 @@ import { RealtimeModule } from '@modules/realtime/realtime.module';
     InstrumentMasterModule,
     InstrumentResolverModule,
     ExecutorsModule,
+    BrokerRegistryModule,
     TradingEngineModule,
     MarketDataModule,
     TradeValidationModule,
