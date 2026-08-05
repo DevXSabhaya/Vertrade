@@ -38,6 +38,7 @@ const History = lazy(() => import('@/pages/app/History'))
 const Account = lazy(() => import('@/pages/app/Account'))
 const Watchlist = lazy(() => import('@/pages/app/Watchlist'))
 const RiskStatus = lazy(() => import('@/pages/app/RiskStatus'))
+const BrokerManager = lazy(() => import('@/pages/app/BrokerManager'))
 
 export const router = createBrowserRouter([
   {
@@ -79,6 +80,7 @@ export const router = createBrowserRouter([
           { path: 'history', element: withSuspense(<History />) },
           { path: 'watchlist', element: withSuspense(<Watchlist />) },
           { path: 'risk', element: withSuspense(<RiskStatus />) },
+          { path: 'brokers', element: withSuspense(<BrokerManager />) },
           { path: 'settings', element: withSuspense(<Account />) },
           { path: 'account', element: withSuspense(<Account />) },
         ],
