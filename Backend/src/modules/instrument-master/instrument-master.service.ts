@@ -24,6 +24,7 @@ import { InstrumentMasterLoadedEvent } from './events/instrument-master-loaded.e
 import { InstrumentMasterRefreshStartedEvent } from './events/instrument-master-refresh-started.event';
 import { InstrumentMasterRefreshCompletedEvent } from './events/instrument-master-refresh-completed.event';
 import { InstrumentMasterRefreshFailedEvent } from './events/instrument-master-refresh-failed.event';
+import { BrokerLoginSucceededEvent } from '@modules/broker/broker-auth/events/broker-login-succeeded.event';
 
 /**
  * Orchestrates loading and refreshing the instrument master. Never touches
@@ -79,6 +80,28 @@ export class InstrumentMasterService implements OnModuleInit {
       this.logger.warn(
         'No instrument master backup available at startup; call refresh() to load one.',
       );
+    }
+
+    this.eventBus.subscribe<BrokerLoginSucceededEvent>(
+      'broker.login.succeeded',
+      () => {
+        void this.handleBrokerLogin();
+      },
+    );
+  }
+
+  private async handleBrokerLogin(): Promise<void> {
+    if (this.activeProviderType === 'DHAN') {
+      try {
+        const instruments = await this.prepareRefreshForMode('LIVE');
+        await this.commitInstrumentSwitch('LIVE', instruments);
+      } catch (error) {
+        this.logger.error(
+          `Failed to automatically refresh instrument master on broker login: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
     }
   }
 
@@ -168,13 +191,15 @@ export class InstrumentMasterService implements OnModuleInit {
   /** Commit phase: atomically swaps the cache and flips the active provider together. */
   async commitInstrumentSwitch(
     mode: TradingMode,
-    instruments: Instrument[],
+    instruments?: Instrument[],
   ): Promise<void> {
     const targetType = this.typeForMode(mode);
-    const snapshot = this.cache.swap(instruments);
+    if (instruments) {
+      const snapshot = this.cache.swap(instruments);
+      await this.persistBackup(instruments, snapshot, targetType);
+    }
     this.activeProviderType = targetType;
     this.lastLoadedSourceProvider = targetType;
-    await this.persistBackup(instruments, snapshot, targetType);
   }
 
   getCache(): InstrumentCache {

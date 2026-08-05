@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { ErrorState } from '@/components/ui/ErrorState'
+import { Input } from '@/components/ui/Input'
 import { useToast } from '@/components/ui/Toast'
 import { useAccountSummary, useResetPaperBalance } from '@/hooks/useAccount'
 import {
@@ -12,6 +13,7 @@ import {
   useBrokerStatus,
   useConnectBroker,
   useDisconnectBroker,
+  useReconnectBroker,
   useSetTradingMode,
   useTradingMode,
 } from '@/hooks/useTradingMode'
@@ -144,7 +146,12 @@ function BrokerConnectionCard() {
   const accountSummary = useBrokerAccountSummary()
   const connectBroker = useConnectBroker()
   const disconnectBroker = useDisconnectBroker()
+  const reconnectBroker = useReconnectBroker()
   const toast = useToast()
+
+  const [isReconnectOpen, setIsReconnectOpen] = useState(false)
+  const [newToken, setNewToken] = useState('')
+  const [reconnectError, setReconnectError] = useState('')
 
   async function handleConnect() {
     try {
@@ -161,6 +168,18 @@ function BrokerConnectionCard() {
       toast.show('Broker disconnected.', 'success')
     } catch (error) {
       toast.show(getErrorMessage(error, 'Could not disconnect the broker.'), 'error')
+    }
+  }
+
+  async function handleReconnect() {
+    try {
+      setReconnectError('')
+      await reconnectBroker.mutateAsync(newToken.trim())
+      toast.show('Broker reconnected successfully.', 'success')
+      setIsReconnectOpen(false)
+      setNewToken('')
+    } catch (error) {
+      setReconnectError(getErrorMessage(error, 'Could not reconnect the broker.'))
     }
   }
 
@@ -211,6 +230,36 @@ function BrokerConnectionCard() {
                 {AUTH_STATUS_LABEL[brokerStatus.data.authStatus] ?? brokerStatus.data.authStatus}
               </dd>
             </div>
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Auth state</dt>
+              <dd className={`font-medium ${
+                brokerStatus.data.authState === 'AUTHENTICATED'
+                  ? 'text-gain-600'
+                  : brokerStatus.data.authState === 'REAUTH_REQUIRED'
+                  ? 'text-loss-600 font-semibold'
+                  : 'text-ink-900'
+              }`}>
+                {brokerStatus.data.authState === 'AUTHENTICATED' && 'Authenticated'}
+                {brokerStatus.data.authState === 'REAUTH_REQUIRED' && 'Reauth Required'}
+                {brokerStatus.data.authState === 'DISCONNECTED' && 'Disconnected'}
+              </dd>
+            </div>
+            {brokerStatus.data.tokenExpiresAt && (
+              <div className="flex justify-between">
+                <dt className="text-ink-500">Token expires</dt>
+                <dd className="font-medium text-ink-900">
+                  {formatDateTime(brokerStatus.data.tokenExpiresAt)}
+                </dd>
+              </div>
+            )}
+            {brokerStatus.data.lastRefreshedAt && (
+              <div className="flex justify-between">
+                <dt className="text-ink-500">Last refreshed</dt>
+                <dd className="font-medium text-ink-900">
+                  {formatDateTime(brokerStatus.data.lastRefreshedAt)}
+                </dd>
+              </div>
+            )}
             {brokerStatus.data.tradingMode === 'LIVE' && (
               <>
                 <div className="flex justify-between">
@@ -259,27 +308,39 @@ function BrokerConnectionCard() {
             )}
           </dl>
 
-          {brokerStatus.data.tradingMode === 'LIVE' && (
-            <div className="mt-5 flex gap-2 border-t border-ink-100 pt-5">
-              <Button
-                size="sm"
-                isLoading={connectBroker.isPending}
-                disabled={brokerStatus.data.connected}
-                onClick={() => void handleConnect()}
-              >
-                {brokerStatus.data.connected ? 'Connected' : 'Connect'}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                isLoading={disconnectBroker.isPending}
-                disabled={!brokerStatus.data.connected}
-                onClick={() => void handleDisconnect()}
-              >
-                Disconnect
-              </Button>
+          {brokerStatus.data.authState === 'REAUTH_REQUIRED' && (
+            <div className="mt-4 p-3 bg-loss-50 border border-loss-200 text-loss-600 rounded-lg text-xs font-medium flex flex-col gap-1">
+              <span className="font-bold text-loss-700">Reconnect Required</span>
+              <span>The broker session has expired or requires manual reconnection. Paste a new Dhan Access Token to restore Live trading capability.</span>
             </div>
           )}
+
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-ink-100 pt-5">
+            <Button
+              size="sm"
+              isLoading={connectBroker.isPending}
+              disabled={brokerStatus.data.connected || brokerStatus.data.authState === 'REAUTH_REQUIRED'}
+              onClick={() => void handleConnect()}
+            >
+              {brokerStatus.data.connected ? 'Connected' : 'Connect'}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              isLoading={disconnectBroker.isPending}
+              disabled={!brokerStatus.data.connected}
+              onClick={() => void handleDisconnect()}
+            >
+              Disconnect
+            </Button>
+            <Button
+              size="sm"
+              variant={brokerStatus.data.authState === 'REAUTH_REQUIRED' ? 'primary' : 'secondary'}
+              onClick={() => setIsReconnectOpen(true)}
+            >
+              Reconnect Broker
+            </Button>
+          </div>
 
           {brokerStatus.data.tradingMode === 'LIVE' && (
             <div className="mt-5 border-t border-ink-100 pt-5">
@@ -336,6 +397,54 @@ function BrokerConnectionCard() {
           )}
         </>
       )}
+
+      <Modal
+        isOpen={isReconnectOpen}
+        onClose={() => {
+          setIsReconnectOpen(false)
+          setNewToken('')
+          setReconnectError('')
+        }}
+        title="Reconnect Broker"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setIsReconnectOpen(false)
+                setNewToken('')
+                setReconnectError('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              isLoading={reconnectBroker.isPending}
+              disabled={!newToken.trim()}
+              onClick={() => void handleReconnect()}
+            >
+              Reconnect
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-ink-500">
+            DhanHQ access tokens expire every 24 hours. Paste a fresh Dhan Access Token generated from your Dhan web console (My Profile &rarr; Access DhanHQ APIs) to restore live trading capability.
+          </p>
+          <Input
+            label="Dhan Access Token"
+            value={newToken}
+            onChange={(e) => {
+              setNewToken(e.target.value)
+              setReconnectError('')
+            }}
+            placeholder="Paste your access token here..."
+            error={reconnectError}
+          />
+        </div>
+      </Modal>
     </Card>
   )
 }

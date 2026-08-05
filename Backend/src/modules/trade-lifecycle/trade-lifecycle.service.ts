@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
@@ -38,7 +38,10 @@ interface TerminalTradeEvent {
  * Trade or its extension itself.
  */
 @Injectable()
-export class TradeLifecycleService implements OnModuleInit {
+export class TradeLifecycleService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(TradeLifecycleService.name);
+  private readonly activeWrites = new Set<Promise<unknown>>();
+  private destroyed = false;
   constructor(
     private readonly tradingEngineService: TradingEngineService,
     private readonly extensionStore: TradeExtensionStore,
@@ -66,7 +69,20 @@ export class TradeLifecycleService implements OnModuleInit {
 
     for (const eventName of TERMINAL_EVENT_NAMES) {
       this.eventBus.subscribe(eventName, (event) => {
-        void this.archive((event as unknown as TerminalTradeEvent).tradeId);
+        const promise = this.archive((event as unknown as TerminalTradeEvent).tradeId);
+        const task = promise
+          .catch((error) => {
+            if (this.destroyed) {
+              return;
+            }
+            this.logger.error(
+              `Failed to archive trade: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          })
+          .finally(() => {
+            this.activeWrites.delete(task);
+          });
+        this.activeWrites.add(task);
       });
     }
   }
@@ -91,5 +107,12 @@ export class TradeLifecycleService implements OnModuleInit {
     void this.marketDataService
       .unsubscribeInstrument(snapshot.instrumentToken, `trade:${tradeId}`)
       .catch(() => undefined);
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.destroyed = true;
+    if (this.activeWrites.size > 0) {
+      await Promise.all(Array.from(this.activeWrites));
+    }
   }
 }

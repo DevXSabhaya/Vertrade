@@ -11,6 +11,8 @@ import { BrokerSessionRefreshedEvent } from './events/broker-session-refreshed.e
 import { BrokerSessionExpiredEvent } from './events/broker-session-expired.event';
 import { BrokerLogoutCompletedEvent } from './events/broker-logout-completed.event';
 
+import { BrokerSessionExpiredException } from './exceptions/broker-session-expired.exception';
+
 function createSession(expiresInMs = 60_000): BrokerSession {
   return new BrokerSession(
     'C123',
@@ -113,13 +115,10 @@ describe('BrokerSessionManager', () => {
   });
 
   describe('refresh', () => {
-    it('falls back to login() when there is no current session', async () => {
-      const session = createSession();
-      brokerAuth.login.mockResolvedValue(session);
-
-      const result = await manager.refresh();
-
-      expect(result).toBe(session);
+    it('throws BrokerSessionExpiredException when there is no current session', async () => {
+      await expect(manager.refresh()).rejects.toThrow(
+        BrokerSessionExpiredException,
+      );
       expect(brokerAuth.refresh).not.toHaveBeenCalled();
     });
 
@@ -199,25 +198,22 @@ describe('BrokerSessionManager', () => {
       expect(brokerAuth.refresh).not.toHaveBeenCalled();
     });
 
-    it('refreshes when the current session has expired', async () => {
+    it('throws BrokerSessionExpiredException when the current session has expired', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
       await manager.login();
       brokerAuth.validateSession.mockReturnValue(false);
 
-      const refreshed = createSession();
-      brokerAuth.refresh.mockResolvedValue(refreshed);
-
-      const result = await manager.ensureSession();
-
-      expect(result).toBe(refreshed);
+      await expect(manager.ensureSession()).rejects.toThrow(
+        BrokerSessionExpiredException,
+      );
     });
 
-    it("shares a single in-flight refresh across concurrent callers instead of calling the broker twice (regression: RenewToken invalidates the token it is called with, so a second concurrent refresh can invalidate the first one's freshly-issued token)", async () => {
+    it("shares a single in-flight refresh across concurrent callers instead of calling the broker twice", async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
       await manager.login();
-      brokerAuth.validateSession.mockReturnValue(false);
+      brokerAuth.validateSession.mockReturnValue(true);
 
       let resolveRefresh: ((session: BrokerSession) => void) | undefined;
       brokerAuth.refresh.mockReturnValue(
@@ -226,10 +222,8 @@ describe('BrokerSessionManager', () => {
         }),
       );
 
-      // Two callers hit the expired session at nearly the same time — e.g.
-      // an order placement and the market-data WebSocket both reconnecting.
-      const first = manager.ensureSession();
-      const second = manager.ensureSession();
+      const first = manager.refresh();
+      const second = manager.refresh();
 
       const refreshed = createSession();
       resolveRefresh?.(refreshed);
@@ -240,7 +234,7 @@ describe('BrokerSessionManager', () => {
       expect(secondResult).toBe(refreshed);
     });
 
-    it('shares a single in-flight login across concurrent callers when there is no session at all', async () => {
+    it('shares a single in-flight login across concurrent callers', async () => {
       let resolveLogin: ((session: BrokerSession) => void) | undefined;
       brokerAuth.login.mockReturnValue(
         new Promise((resolve) => {
@@ -248,8 +242,8 @@ describe('BrokerSessionManager', () => {
         }),
       );
 
-      const first = manager.ensureSession();
-      const second = manager.ensureSession();
+      const first = manager.login();
+      const second = manager.login();
 
       const session = createSession();
       resolveLogin?.(session);
@@ -260,13 +254,10 @@ describe('BrokerSessionManager', () => {
       expect(secondResult).toBe(session);
     });
 
-    it('logs in when there is no current session at all', async () => {
-      const session = createSession();
-      brokerAuth.login.mockResolvedValue(session);
-
-      const result = await manager.ensureSession();
-
-      expect(result).toBe(session);
+    it('throws BrokerSessionExpiredException when there is no current session at all', async () => {
+      await expect(manager.ensureSession()).rejects.toThrow(
+        BrokerSessionExpiredException,
+      );
     });
   });
 

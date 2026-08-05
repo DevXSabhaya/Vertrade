@@ -22,7 +22,7 @@ describe('TradingModeService', () => {
   let brokerSessionManager: jest.Mocked<
     Pick<
       BrokerSessionManager,
-      'ensureSession' | 'isSessionValid' | 'logout' | 'bootstrapLiveSession'
+      'ensureSession' | 'isSessionValid' | 'logout' | 'bootstrapLiveSession' | 'unloadSession'
     >
   >;
   let brokerTokenRenewalScheduler: jest.Mocked<
@@ -68,6 +68,7 @@ describe('TradingModeService', () => {
       isSessionValid: jest.fn().mockReturnValue(true),
       logout: jest.fn().mockResolvedValue(undefined),
       bootstrapLiveSession: jest.fn().mockResolvedValue(undefined),
+      unloadSession: jest.fn(),
     };
     brokerTokenRenewalScheduler = {
       start: jest.fn(),
@@ -177,7 +178,7 @@ describe('TradingModeService', () => {
 
       expect(service.getCurrentMode()).toBe('PAPER');
       expect(brokerSessionManager.ensureSession).not.toHaveBeenCalled();
-      expect(brokerSessionManager.logout).toHaveBeenCalledTimes(1);
+      expect(brokerSessionManager.unloadSession).toHaveBeenCalledTimes(1);
       expect(brokerTokenRenewalScheduler.stop).toHaveBeenCalledTimes(1);
       expect(marketDataService.prepareProviderForMode).toHaveBeenCalledWith(
         'PAPER',
@@ -228,13 +229,12 @@ describe('TradingModeService', () => {
       expect(publishSpy).not.toHaveBeenCalled();
     });
 
-    it('refuses to switch to LIVE when ensureSession resolves but the session is not actually valid', async () => {
+    it('allows switching to LIVE when ensureSession resolves but the session is not actually valid', async () => {
       brokerSessionManager.isSessionValid.mockReturnValue(false);
 
-      await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow(
-        BusinessException,
-      );
-      expect(service.getCurrentMode()).toBe('PAPER');
+      const result = await service.setMode('LIVE', 'user-1');
+      expect(result).toBe('LIVE');
+      expect(service.getCurrentMode()).toBe('LIVE');
     });
 
     it('aborts the prepared market-data provider and leaves mode unchanged when the instrument-master prepare fails', async () => {

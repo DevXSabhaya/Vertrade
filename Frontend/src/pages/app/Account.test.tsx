@@ -29,7 +29,7 @@ function accountSummary() {
 function brokerStatus(overrides: Partial<BrokerStatusResponse> = {}): BrokerStatusResponse {
   return {
     tradingMode: 'PAPER',
-    brokerName: 'angel-one',
+    brokerName: 'dhan',
     connected: false,
     authStatus: 'UNKNOWN',
     clientCode: null,
@@ -37,8 +37,11 @@ function brokerStatus(overrides: Partial<BrokerStatusResponse> = {}): BrokerStat
     orderExecutionCapability: 'UNKNOWN',
     lastSuccessfulConnectionAt: null,
     lastHealthCheckAt: null,
+    tokenExpiresAt: null,
+    lastRefreshedAt: null,
+    authState: 'DISCONNECTED',
     ...overrides,
-  }
+  } as BrokerStatusResponse
 }
 
 describe('Account page', () => {
@@ -124,6 +127,7 @@ describe('Account page', () => {
         orderExecutionCapability: 'HEALTHY',
         lastSuccessfulConnectionAt: '2026-01-01T09:00:00.000Z',
         lastHealthCheckAt: '2026-01-01T09:05:00.000Z',
+        authState: 'AUTHENTICATED',
       }),
     )
     renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
@@ -143,12 +147,14 @@ describe('Account page', () => {
     ).toBeInTheDocument()
   })
 
-  it('never shows connect/disconnect controls or an account summary in PAPER mode', async () => {
+  it('shows connect/disconnect/reconnect controls but never shows an account summary in PAPER mode', async () => {
     vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
     renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
 
     await screen.findByText('Not connected')
-    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reconnect Broker' })).toBeInTheDocument()
     expect(screen.queryByText('Account Summary')).not.toBeInTheDocument()
   })
 

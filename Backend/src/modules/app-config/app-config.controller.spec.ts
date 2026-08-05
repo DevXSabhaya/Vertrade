@@ -257,14 +257,18 @@ describe('AppConfigController', () => {
   });
 
   describe('connectBroker', () => {
-    it('rejects in PAPER mode without ever touching the broker session', async () => {
+    it('calls ensureSession() in PAPER mode and returns the status', async () => {
       const { controller, brokerSessionManager } = buildController({
         tradingMode: 'PAPER',
+        isSessionValid: true,
+        clientCode: 'ABC123',
       });
-      await expect(controller.connectBroker()).rejects.toThrow(
-        BusinessException,
-      );
-      expect(brokerSessionManager.ensureSession).not.toHaveBeenCalled();
+
+      const result = await controller.connectBroker();
+
+      expect(brokerSessionManager.ensureSession).toHaveBeenCalledTimes(1);
+      expect(result.connected).toBe(true);
+      expect(result.clientCode).toBe('ABC123');
     });
 
     it('calls ensureSession() in LIVE mode and returns the refreshed status', async () => {
@@ -283,14 +287,13 @@ describe('AppConfigController', () => {
   });
 
   describe('disconnectBroker', () => {
-    it('rejects in PAPER mode without ever touching the broker session', async () => {
+    it('calls logout() in PAPER mode and returns the status', async () => {
       const { controller, brokerSessionManager } = buildController({
         tradingMode: 'PAPER',
       });
-      await expect(controller.disconnectBroker()).rejects.toThrow(
-        BusinessException,
-      );
-      expect(brokerSessionManager.logout).not.toHaveBeenCalled();
+      const result = await controller.disconnectBroker();
+      expect(brokerSessionManager.logout).toHaveBeenCalledTimes(1);
+      expect(result.connected).toBe(false);
     });
 
     it('calls logout() in LIVE mode', async () => {

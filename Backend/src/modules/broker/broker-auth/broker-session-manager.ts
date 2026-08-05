@@ -22,6 +22,8 @@ import { BrokerSessionRefreshedEvent } from './events/broker-session-refreshed.e
 import { BrokerSessionExpiredEvent } from './events/broker-session-expired.event';
 import { BrokerLogoutCompletedEvent } from './events/broker-logout-completed.event';
 
+import { BrokerSessionExpiredException } from './exceptions/broker-session-expired.exception';
+
 /**
  * Owns the single active broker session for this process: restoring it from
  * secure storage on startup, logging in, refreshing, and logging out — all
@@ -69,19 +71,34 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const stored = await this.tokenRepository.find(
-      SYSTEM_USER_ID,
-      BROKER_NAME_DHAN,
-    );
-    if (stored && this.brokerAuth.validateSession(stored)) {
-      this.currentSession = stored;
-    }
+    await this.restoreSession();
   }
 
   async onModuleDestroy(): Promise<void> {
     if (this.currentSession) {
       await this.logout().catch(() => undefined);
     }
+  }
+
+  async restoreSession(): Promise<BrokerSession | null> {
+    const stored = await this.tokenRepository.find(
+      SYSTEM_USER_ID,
+      BROKER_NAME_DHAN,
+    );
+    if (stored) {
+      if (this.brokerAuth.validateSession(stored)) {
+        this.currentSession = stored;
+        this.reauthRequired = false;
+        return stored;
+      } else {
+        this.currentSession = null;
+        this.reauthRequired = true;
+        return null;
+      }
+    }
+    this.currentSession = null;
+    this.reauthRequired = false;
+    return null;
   }
 
   getActiveSession(): BrokerSession | null {
@@ -105,10 +122,14 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     ) {
       return this.currentSession;
     }
-    if (this.currentSession) {
-      return this.refresh();
+    const restored = await this.restoreSession();
+    if (restored) {
+      return restored;
     }
-    return this.login();
+    this.reauthRequired = true;
+    throw new BrokerSessionExpiredException(
+      'No active broker session exists. Reauthentication is required.',
+    );
   }
 
   async login(overrideAccessToken?: string): Promise<BrokerSession> {
@@ -151,7 +172,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     try {
       if (this.currentSession) {
         await this.refresh();
-      } else {
+      } else if (!this.reauthRequired) {
         await this.login();
       }
     } catch {
@@ -166,7 +187,10 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
       return this.pendingAuth;
     }
     if (!this.currentSession) {
-      return this.login();
+      this.reauthRequired = true;
+      throw new BrokerSessionExpiredException(
+        'No active broker session exists to refresh. Reauthentication is required.',
+      );
     }
     this.pendingAuth = this.performRefresh(this.currentSession);
     try {
@@ -247,6 +271,10 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     this.currentSession = null;
     this.reauthRequired = false;
     this.eventBus.publish(new BrokerLogoutCompletedEvent(clientCode));
+  }
+
+  unloadSession(): void {
+    this.currentSession = null;
   }
 
   /**

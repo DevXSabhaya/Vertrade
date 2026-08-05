@@ -16,8 +16,10 @@ import { InstrumentMasterService } from '@modules/instrument-master/instrument-m
 import { BusinessException } from '@common/exceptions/business.exception';
 import type { TradingMode } from '@modules/trade-lifecycle/models/trade-record.model';
 import { TradingModeChangedEvent } from './events/trading-mode-changed.event';
+import { BrokerSessionExpiredException } from '@modules/broker/broker-auth/exceptions/broker-session-expired.exception';
 
-/** SettingsService key — a single shared key, not per-user: this deployment has one live broker session/mode for the whole process, matching the rest of the broker architecture (SYSTEM_USER_ID). */
+/**
+ * SettingsService key — a single shared key, not per-user: this deployment has one live broker session/mode for the whole process, matching the rest of the broker architecture (SYSTEM_USER_ID). */
 export const TRADING_MODE_SETTING_KEY = 'TRADING_MODE_OVERRIDE';
 
 /**
@@ -165,10 +167,14 @@ export class TradingModeService
       instruments =
         await this.instrumentMasterService.prepareRefreshForMode(mode);
     } catch (error) {
-      await this.marketDataService
-        .abortPreparedProvider(mode)
-        .catch(() => undefined);
-      throw this.wrapSwitchFailure(mode, error);
+      if (error instanceof BrokerSessionExpiredException) {
+        instruments = undefined;
+      } else {
+        await this.marketDataService
+          .abortPreparedProvider(mode)
+          .catch(() => undefined);
+        throw this.wrapSwitchFailure(mode, error);
+      }
     }
 
     // --- COMMIT: tight synchronous sequence, mode/providers/session flip together ---
@@ -183,7 +189,7 @@ export class TradingModeService
       this.brokerTokenRenewalScheduler.start();
     } else {
       this.brokerTokenRenewalScheduler.stop();
-      await this.brokerSessionManager.logout().catch(() => undefined);
+      this.brokerSessionManager.unloadSession();
     }
 
     this.logger.log(
@@ -213,15 +219,13 @@ export class TradingModeService
     try {
       await this.brokerSessionManager.ensureSession();
     } catch (error) {
+      if (error instanceof BrokerSessionExpiredException) {
+        // Do not throw! Let the switch complete so the user enters LIVE mode, but the status is REAUTH_REQUIRED.
+        return;
+      }
       const reason = error instanceof Error ? error.message : 'unknown error';
       throw new BusinessException(
         `Cannot switch to LIVE mode: broker authentication failed (${reason}).`,
-      );
-    }
-
-    if (!this.brokerSessionManager.isSessionValid()) {
-      throw new BusinessException(
-        'Cannot switch to LIVE mode: broker session could not be established.',
       );
     }
   }

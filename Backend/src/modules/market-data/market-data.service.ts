@@ -35,6 +35,10 @@ import {
   HeartbeatReceivedEvent,
 } from './events';
 
+import { BrokerLoginSucceededEvent } from '@modules/broker/broker-auth/events/broker-login-succeeded.event';
+import { BrokerLogoutCompletedEvent } from '@modules/broker/broker-auth/events/broker-logout-completed.event';
+import { BrokerSessionExpiredException } from '@modules/broker/broker-auth/exceptions/broker-session-expired.exception';
+
 /**
  * The single owner of market data, and the single owner of PAPER/LIVE
  * provider switching. Both MockMarketDataProvider and DhanMarketDataProvider
@@ -87,6 +91,34 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     this.wireHandlers(this.mockProvider, MarketDataProviderType.MOCK);
     this.wireHandlers(this.dhanProvider, MarketDataProviderType.DHAN);
+
+    this.eventBus.subscribe<BrokerLoginSucceededEvent>(
+      'broker.login.succeeded',
+      () => {
+        void this.handleBrokerLogin();
+      },
+    );
+
+    this.eventBus.subscribe<BrokerLogoutCompletedEvent>(
+      'broker.logout.completed',
+      () => {
+        void this.handleBrokerLogout();
+      },
+    );
+  }
+
+  private async handleBrokerLogin(): Promise<void> {
+    if (this.started && this.activeProviderType === MarketDataProviderType.DHAN) {
+      if (!this.activeProvider().isConnected()) {
+        await this.activeProvider().connect().catch(() => undefined);
+      }
+    }
+  }
+
+  private async handleBrokerLogout(): Promise<void> {
+    if (this.activeProviderType === MarketDataProviderType.DHAN) {
+      await this.activeProvider().disconnect().catch(() => undefined);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -120,7 +152,15 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const target = this.providerOfType(targetType);
-    await target.connect();
+    try {
+      await target.connect();
+    } catch (error) {
+      if (error instanceof BrokerSessionExpiredException) {
+        // Swallow it! The provider remains disconnected until reauth happens.
+        return;
+      }
+      throw error;
+    }
     const instruments = this.subscriptionManager.getSubscribedInstruments();
     if (instruments.length > 0) {
       await target.subscribe(instruments);
@@ -143,6 +183,9 @@ export class MarketDataService implements OnModuleInit, OnModuleDestroy {
     if (this.started) {
       this.clearWatchdog();
       await previous.disconnect().catch(() => undefined);
+      this.connectionState = this.activeProvider().isConnected()
+        ? MarketDataConnectionState.CONNECTED
+        : MarketDataConnectionState.DISCONNECTED;
       this.startHeartbeatWatchdog();
     }
   }

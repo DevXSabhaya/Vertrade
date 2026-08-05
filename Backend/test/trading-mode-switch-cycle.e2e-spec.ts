@@ -138,6 +138,7 @@ describe('Trading mode switch cycle (e2e)', () => {
     instrumentMasterService = app.get(InstrumentMasterService);
     brokerSessionManager = app.get(BrokerSessionManager);
     await marketDataService.start();
+    await brokerSessionManager.login();
   }, 30_000);
 
   afterAll(async () => {
@@ -210,7 +211,7 @@ describe('Trading mode switch cycle (e2e)', () => {
     );
 
     expect(results.every((mode) => mode === 'LIVE')).toBe(true);
-    expect(stubBrokerAuth.login).toHaveBeenCalledTimes(1);
+    expect(stubBrokerAuth.login).toHaveBeenCalledTimes(0);
     expect(tradingModeService.getCurrentMode()).toBe('LIVE');
   }, 15_000);
 

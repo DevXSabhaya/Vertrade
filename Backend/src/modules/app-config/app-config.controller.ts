@@ -115,29 +115,30 @@ export class AppConfigController {
   @UseGuards(JwtAuthGuard)
   getBrokerStatus(): BrokerStatusResponseBody {
     const tradingMode = this.tradingModeService.getCurrentMode();
-    if (tradingMode === 'PAPER') {
-      return {
-        tradingMode,
-        brokerName: BROKER_NAME_DHAN,
-        connected: false,
-        authStatus: HealthStatus.UNKNOWN,
-        clientCode: null,
-        marketDataCapability: HealthStatus.UNKNOWN,
-        orderExecutionCapability: HealthStatus.UNKNOWN,
-        lastSuccessfulConnectionAt: null,
-        lastHealthCheckAt: null,
-        tokenExpiresAt: null,
-        lastRefreshedAt: null,
-        instrumentMasterStatus: HealthStatus.UNKNOWN,
-        websocketStatus: HealthStatus.UNKNOWN,
-        authState: 'DISCONNECTED',
-      };
-    }
-
     const session = this.brokerSessionManager.getActiveSession();
     const snapshot = this.brokerHealthService.getSnapshot();
     const lastRefreshedAt = this.brokerSessionManager.getLastRefreshedAt();
     const instrumentSnapshot = this.instrumentMasterService.getSnapshot();
+
+    if (tradingMode === 'PAPER') {
+      return {
+        tradingMode,
+        brokerName: BROKER_NAME_DHAN,
+        connected: this.brokerSessionManager.isSessionValid(),
+        authStatus: HealthStatus.UNKNOWN,
+        clientCode: session?.clientCode ?? null,
+        marketDataCapability: HealthStatus.UNKNOWN,
+        orderExecutionCapability: HealthStatus.UNKNOWN,
+        lastSuccessfulConnectionAt: null,
+        lastHealthCheckAt: null,
+        tokenExpiresAt: session?.expiresAt.toISOString() ?? null,
+        lastRefreshedAt: lastRefreshedAt?.toISOString() ?? null,
+        instrumentMasterStatus: HealthStatus.UNKNOWN,
+        websocketStatus: HealthStatus.UNKNOWN,
+        authState: this.brokerSessionManager.getAuthState(),
+      };
+    }
+
     return {
       tradingMode,
       brokerName: BROKER_NAME_DHAN,
@@ -173,7 +174,6 @@ export class AppConfigController {
   @Post('broker/connect')
   @UseGuards(JwtAuthGuard)
   async connectBroker(): Promise<BrokerStatusResponseBody> {
-    this.assertLiveMode();
     await this.brokerSessionManager.ensureSession();
     return this.getBrokerStatus();
   }
@@ -181,7 +181,6 @@ export class AppConfigController {
   @Post('broker/disconnect')
   @UseGuards(JwtAuthGuard)
   async disconnectBroker(): Promise<BrokerStatusResponseBody> {
-    this.assertLiveMode();
     await this.brokerSessionManager.logout();
     return this.getBrokerStatus();
   }

@@ -29,6 +29,9 @@ export interface BrokerStatusResponse {
   readonly orderExecutionCapability: BrokerAuthStatus
   readonly lastSuccessfulConnectionAt: string | null
   readonly lastHealthCheckAt: string | null
+  readonly tokenExpiresAt: string | null
+  readonly lastRefreshedAt: string | null
+  readonly authState: 'AUTHENTICATED' | 'DISCONNECTED' | 'REAUTH_REQUIRED'
 }
 
 export interface BrokerAccountSummaryResponse {

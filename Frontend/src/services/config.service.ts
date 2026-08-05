@@ -27,6 +27,13 @@ export const configService = {
     return apiFetch<BrokerStatusResponse>('/config/broker/disconnect', { method: 'POST' })
   },
 
+  reconnectBroker(accessToken: string): Promise<BrokerStatusResponse> {
+    return apiFetch<BrokerStatusResponse>('/config/broker/reconnect', {
+      method: 'POST',
+      body: { accessToken },
+    })
+  },
+
   brokerAccountSummary(signal?: AbortSignal): Promise<BrokerAccountSummaryResponse> {
     return apiFetch<BrokerAccountSummaryResponse>('/config/broker-account-summary', { signal })
   },

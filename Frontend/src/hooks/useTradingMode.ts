@@ -41,9 +41,11 @@ export function useBrokerAccountSummary() {
   })
 }
 
-function invalidateBrokerQueries(queryClient: ReturnType<typeof useQueryClient>) {
-  void queryClient.invalidateQueries({ queryKey: ['config', 'broker-status'] })
-  void queryClient.invalidateQueries({ queryKey: ['config', 'broker-account-summary'] })
+function invalidateAllQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ['config'] })
+  void queryClient.invalidateQueries({ queryKey: ['trades'] })
+  void queryClient.invalidateQueries({ queryKey: ['account'] })
+  void queryClient.invalidateQueries({ queryKey: ['risk'] })
 }
 
 /**
@@ -59,7 +61,7 @@ export function useSetTradingMode() {
     mutationFn: (mode: TradingMode) => configService.setTradingMode({ mode }),
     onSuccess: (data) => {
       queryClient.setQueryData(['config', 'trading-mode'], data)
-      invalidateBrokerQueries(queryClient)
+      invalidateAllQueries(queryClient)
     },
   })
 }
@@ -68,7 +70,7 @@ export function useConnectBroker() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => configService.connectBroker(),
-    onSuccess: () => invalidateBrokerQueries(queryClient),
+    onSuccess: () => invalidateAllQueries(queryClient),
   })
 }
 
@@ -76,6 +78,14 @@ export function useDisconnectBroker() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => configService.disconnectBroker(),
-    onSuccess: () => invalidateBrokerQueries(queryClient),
+    onSuccess: () => invalidateAllQueries(queryClient),
+  })
+}
+
+export function useReconnectBroker() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (accessToken: string) => configService.reconnectBroker(accessToken),
+    onSuccess: () => invalidateAllQueries(queryClient),
   })
 }

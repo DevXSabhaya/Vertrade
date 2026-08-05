@@ -46,6 +46,7 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
    * of failing gracefully.
    */
   private destroyed = false;
+  private readonly activeWritePromises = new Set<Promise<unknown>>();
 
   constructor(
     private readonly tradingEngineService: TradingEngineService,
@@ -125,7 +126,18 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
 
   async captureAndPersist(): Promise<RecoverySnapshot> {
     const snapshot = this.captureSnapshot();
-    await this.persistSnapshot(snapshot);
+    const promise = this.persistSnapshot(snapshot);
+    this.activeWritePromises.add(promise);
+    try {
+      await promise;
+    } catch (error) {
+      if (this.destroyed) {
+        return snapshot;
+      }
+      throw error;
+    } finally {
+      this.activeWritePromises.delete(promise);
+    }
     return snapshot;
   }
 
@@ -153,12 +165,14 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
     }, this.config.snapshotDebounceMs);
   }
 
-  /** Cancels any pending debounced capture and permanently stops scheduling new ones — without this, a timer scheduled just before (or during) shutdown fires after the app (and its Mongo connection) has already closed. */
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
     if (this.debounceHandle !== null) {
       this.scheduler.clearTimeout(this.debounceHandle);
       this.debounceHandle = null;
+    }
+    if (this.activeWritePromises.size > 0) {
+      await Promise.all(Array.from(this.activeWritePromises).map((p) => p.catch(() => undefined)));
     }
   }
 }
