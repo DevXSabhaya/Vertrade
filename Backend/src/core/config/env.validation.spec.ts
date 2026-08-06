@@ -74,10 +74,15 @@ describe('validateEnv', () => {
     ).toThrow(/INSTRUMENT_MASTER_PROVIDER must be either MOCK or DHAN/);
   });
 
-  it('defaults MARKET_DATA_PROVIDER and INSTRUMENT_MASTER_PROVIDER to DHAN in LIVE mode — a flat MOCK default would let a live deployment silently trade/chart off synthetic data', () => {
+  it('defaults MARKET_DATA_PROVIDER and INSTRUMENT_MASTER_PROVIDER to DHAN in production, regardless of trading mode — Market Data is independent of Trading Mode, so a flat MOCK default would let a production Paper deployment silently chart off synthetic data', () => {
     const env = validateEnv(
-      baseConfig({
-        TRADING_MODE: 'LIVE',
+      googleConfig({
+        NODE_ENV: 'production',
+        TRADING_MODE: 'PAPER',
+        JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+        TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+        MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+        FRONTEND_URL: 'https://app.example.com',
         DHAN_CLIENT_ID: 'client-id',
         DHAN_API_KEY: 'api-key',
         DHAN_ACCESS_TOKEN: 'access-token',
@@ -87,19 +92,29 @@ describe('validateEnv', () => {
     expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('DHAN');
   });
 
-  it('still honors an explicit MOCK override in LIVE mode (e.g. a rehearsal deployment)', () => {
+  it('still honors an explicit MOCK override in production (e.g. a rehearsal deployment)', () => {
     const env = validateEnv(
-      baseConfig({
-        TRADING_MODE: 'LIVE',
+      googleConfig({
+        NODE_ENV: 'production',
+        TRADING_MODE: 'PAPER',
+        JWT_SECRET: 'k7Rp2mQ9vLx4Nz8Wc3Ft6Bj1Ys5Hd0Ae7Ug4Io2Pk9M',
+        TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
+        MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
+        FRONTEND_URL: 'https://app.example.com',
         MARKET_DATA_PROVIDER: 'MOCK',
         INSTRUMENT_MASTER_PROVIDER: 'MOCK',
-        DHAN_CLIENT_ID: 'client-id',
-        DHAN_API_KEY: 'api-key',
-        DHAN_ACCESS_TOKEN: 'access-token',
       }),
     );
     expect(env.MARKET_DATA_PROVIDER).toBe('MOCK');
     expect(env.INSTRUMENT_MASTER_PROVIDER).toBe('MOCK');
+  });
+
+  it('requires Dhan credentials outside LIVE mode when MARKET_DATA_PROVIDER=DHAN is explicitly set', () => {
+    expect(() =>
+      validateEnv(
+        baseConfig({ TRADING_MODE: 'PAPER', MARKET_DATA_PROVIDER: 'DHAN' }),
+      ),
+    ).toThrow(/DHAN_CLIENT_ID is required/);
   });
 
   it('defaults EMAIL_PROVIDER to DEVELOPMENT and requires no Google credentials outside production', () => {
@@ -223,6 +238,12 @@ describe('validateEnv', () => {
           FRONTEND_URL: 'https://app.example.com',
           JWT_SECRET: 'a'.repeat(32),
           TOKEN_ENCRYPTION_KEY: 'a'.repeat(32),
+          // Production always resolves Market Data/Instrument Master to
+          // DHAN (Core Architecture Principle #1/#5), so real Dhan
+          // credentials are required in production even in Paper mode.
+          DHAN_CLIENT_ID: 'client-id',
+          DHAN_API_KEY: 'api-key',
+          DHAN_ACCESS_TOKEN: 'access-token',
         }),
       );
       expect(env.NODE_ENV).toBe('production');
@@ -282,6 +303,9 @@ describe('validateEnv', () => {
           TOKEN_ENCRYPTION_KEY: 'a9Kd3Fh7Jm1Lp5Qs8Tv2Wy6Za0Bc4Ef8Gi1Kn5Or9Uq',
           MONGODB_URI: 'mongodb+srv://prod-cluster.example.com/trading-app',
           FRONTEND_URL: 'https://app.example.com',
+          DHAN_CLIENT_ID: 'client-id',
+          DHAN_API_KEY: 'api-key',
+          DHAN_ACCESS_TOKEN: 'access-token',
         }),
       );
       expect(env.NODE_ENV).toBe('production');

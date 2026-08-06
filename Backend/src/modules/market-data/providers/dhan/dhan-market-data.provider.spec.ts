@@ -1,8 +1,4 @@
-import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
-import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
-import { BrokerSession } from '@modules/broker/broker-auth/entities/broker-session.entity';
-import { BrokerToken } from '@modules/broker/broker-auth/value-objects/broker-token.vo';
-import { BrokerCredentials } from '@modules/broker/broker-auth/value-objects/broker-credentials.vo';
+import { MarketDataCredentialProvider } from '../../market-data-credential.provider';
 import type { ReconnectOptions } from '../../models/reconnect-options.model';
 import { MarketDataInstrument } from '../../models/market-data-instrument.model';
 import { MarketDataConnectionState } from '../../models/market-data-connection-state.enum';
@@ -108,20 +104,15 @@ class FakeWebSocketClient implements IWebSocketClient {
   }
 }
 
-function createFakeSession(): BrokerSession {
-  return new BrokerSession(
-    'CLIENT1',
-    new BrokerToken('access-token-value'),
-    new Date(),
-    new Date(Date.now() + 3_600_000),
-  );
-}
-
-function createCredentialsProvider(): BrokerCredentialsProvider {
+function createCredentialProvider(): MarketDataCredentialProvider {
   return {
+    hasCredentials: () => true,
     getCredentials: () =>
-      new BrokerCredentials('CLIENT1', 'api-key', 'access-token-value'),
-  } as unknown as BrokerCredentialsProvider;
+      Promise.resolve({
+        clientId: 'CLIENT1',
+        accessToken: 'access-token-value',
+      }),
+  } as unknown as MarketDataCredentialProvider;
 }
 
 function reconnectOptions(
@@ -140,22 +131,14 @@ function reconnectOptions(
 
 describe('DhanMarketDataProvider', () => {
   let wsClient: FakeWebSocketClient;
-  let sessionManager: jest.Mocked<
-    Pick<BrokerSessionManager, 'ensureSession' | 'refresh'>
-  >;
   let scheduler: FakeTimerScheduler;
   let provider: DhanMarketDataProvider;
 
   beforeEach(() => {
     wsClient = new FakeWebSocketClient();
-    sessionManager = {
-      ensureSession: jest.fn().mockResolvedValue(createFakeSession()),
-      refresh: jest.fn().mockResolvedValue(createFakeSession()),
-    };
     scheduler = new FakeTimerScheduler();
     provider = new DhanMarketDataProvider(
-      createCredentialsProvider(),
-      sessionManager as unknown as BrokerSessionManager,
+      createCredentialProvider(),
       wsClient,
       reconnectOptions(),
       scheduler,
@@ -163,10 +146,9 @@ describe('DhanMarketDataProvider', () => {
     );
   });
 
-  it('connects using the session access token, client id, and version/authType query params', async () => {
+  it('connects using the credential provider access token, client id, and version/authType query params', async () => {
     await provider.connect();
 
-    expect(sessionManager.ensureSession).toHaveBeenCalled();
     expect(wsClient.connectUrls).toHaveLength(1);
     const url = new URL(wsClient.connectUrls[0]);
     expect(url.searchParams.get('clientId')).toBe('CLIENT1');
@@ -337,8 +319,7 @@ describe('DhanMarketDataProvider', () => {
 
     it('gives up after exceeding maxRetries and settles as DISCONNECTED', async () => {
       const limitedProvider = new DhanMarketDataProvider(
-        createCredentialsProvider(),
-        sessionManager as unknown as BrokerSessionManager,
+        createCredentialProvider(),
         wsClient,
         reconnectOptions({ maxRetries: 1 }),
         scheduler,

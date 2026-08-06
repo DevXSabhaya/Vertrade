@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
-import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
+import { MarketDataCredentialProvider } from '../../market-data-credential.provider';
 import { CLOCK } from '@shared/clock/clock.constants';
 import type { IClock } from '@shared/clock/clock.interface';
 import { TIMER_SCHEDULER } from '@shared/scheduler/timer-scheduler.constants';
@@ -67,8 +66,7 @@ export class DhanMarketDataProvider implements IMarketDataProvider {
     ((state: MarketDataConnectionState) => void) | null = null;
 
   constructor(
-    private readonly credentialsProvider: BrokerCredentialsProvider,
-    private readonly sessionManager: BrokerSessionManager,
+    private readonly credentialProvider: MarketDataCredentialProvider,
     @Inject(MARKET_DATA_WEBSOCKET_CLIENT)
     private readonly wsClient: IWebSocketClient,
     @Inject(MARKET_DATA_RECONNECT_OPTIONS)
@@ -81,11 +79,10 @@ export class DhanMarketDataProvider implements IMarketDataProvider {
     this.disconnectRequested = false;
     this.setState(MarketDataConnectionState.CONNECTING);
 
-    const session = await this.sessionManager.ensureSession();
-    const credentials = this.credentialsProvider.getCredentials();
+    const credentials = await this.credentialProvider.getCredentials();
     const url = this.buildConnectionUrl(
       credentials.clientId,
-      session.token.getAccessToken(),
+      credentials.accessToken,
     );
 
     this.wsClient.onMessage((data) => this.handleRawMessage(data));

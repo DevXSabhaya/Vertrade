@@ -11,7 +11,6 @@ import { TradingModeService } from '../src/modules/trading-mode/trading-mode.ser
 import { MarketDataService } from '../src/modules/market-data/market-data.service';
 import { InstrumentMasterService } from '../src/modules/instrument-master/instrument-master.service';
 import { BrokerSessionManager } from '../src/modules/broker/broker-auth/broker-session-manager';
-import { MarketDataProviderType } from '../src/modules/market-data/models/market-data-provider-type.enum';
 import { BrokerSession } from '../src/modules/broker/broker-auth/entities/broker-session.entity';
 import { BrokerToken } from '../src/modules/broker/broker-auth/value-objects/broker-token.vo';
 import { Instrument } from '../src/modules/instrument-master/entities/instrument.entity';
@@ -26,9 +25,12 @@ import type {
  * End-to-end proof (real Nest app, real MongoDB, real
  * TradingModeService/MarketDataService/InstrumentMasterService/
  * BrokerSessionManager wiring) that repeated PAPER<->LIVE switching works
- * unlimited times with no leaked state — only the network edges (Dhan REST
- * auth and the market-data WebSocket) are stubbed, since real Dhan
- * credentials are never available in this environment.
+ * unlimited times, changes ONLY order-execution/broker-session state (Core
+ * Architecture Principle #4), and never touches Market Data or Instrument
+ * Master (Principles #1/#2/#5) — no reconnect, no provider swap, no cache
+ * re-source. Only the network edges (Dhan REST auth and the market-data
+ * WebSocket) are stubbed, since real Dhan credentials are never available in
+ * this environment.
  */
 describe('Trading mode switch cycle (e2e)', () => {
   let app: INestApplication;
@@ -138,6 +140,7 @@ describe('Trading mode switch cycle (e2e)', () => {
     instrumentMasterService = app.get(InstrumentMasterService);
     brokerSessionManager = app.get(BrokerSessionManager);
     await marketDataService.start();
+    await instrumentMasterService.refresh();
     await brokerSessionManager.login();
   }, 30_000);
 
@@ -159,18 +162,36 @@ describe('Trading mode switch cycle (e2e)', () => {
     await app.close();
   }, 20_000);
 
-  it('switches PAPER -> LIVE -> PAPER -> LIVE repeatedly (12 real cycles) with providers always matching the committed mode', async () => {
+  it('switches PAPER -> LIVE -> PAPER -> LIVE repeatedly (12 real cycles), each switch completing in under 2 seconds, changing only broker-session state', async () => {
+    const fixedProviderType = marketDataService.getHealth().providerType;
+    const fixedToken = instrumentMasterService
+      .getCache()
+      .findByToken('MOCK-TOKEN')
+      ? 'MOCK-TOKEN'
+      : 'DHAN-TOKEN';
+
     for (let i = 0; i < 12; i += 1) {
       const targetMode = i % 2 === 0 ? 'LIVE' : 'PAPER';
 
+      const startedAt = Date.now();
       await tradingModeService.setMode(targetMode, `e2e-user-${i}`);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
 
       expect(tradingModeService.getCurrentMode()).toBe(targetMode);
+
+      // Market Data and Instrument Master are untouched by the mode switch
+      // (Core Architecture Principles #1/#2/#5): same provider, same
+      // instrument, every single cycle.
       expect(marketDataService.getHealth().providerType).toBe(
-        targetMode === 'LIVE'
-          ? MarketDataProviderType.DHAN
-          : MarketDataProviderType.MOCK,
+        fixedProviderType,
       );
+      expect(
+        instrumentMasterService.getCache().findByToken(fixedToken),
+      ).toBeDefined();
+
+      // Market data stays connected throughout — mode switching must never
+      // trigger a disconnect/reconnect cycle.
+      expect(marketDataService.getHealth().connected).toBe(true);
 
       if (targetMode === 'LIVE') {
         expect(brokerSessionManager.getAuthState()).toBe('AUTHENTICATED');
@@ -179,25 +200,25 @@ describe('Trading mode switch cycle (e2e)', () => {
       }
     }
 
-    // Exactly one WebSocket connect/disconnect per LIVE<->PAPER edge crossed
-    // (6 transitions into LIVE across 12 alternating switches) — never a
-    // duplicate connection left open.
-    expect(wsClient.connectCount).toBeGreaterThanOrEqual(6);
-    expect(
-      wsClient.connectCount - wsClient.disconnectCount,
-    ).toBeLessThanOrEqual(1);
+    // In this test environment the fixed provider is MOCK (no real
+    // WebSocket transport), so the WS client stub used only by
+    // DhanMarketDataProvider is never touched at all — itself further proof
+    // that mode switching never reaches into the market-data provider.
+    expect(wsClient.connectCount).toBe(0);
+    expect(wsClient.disconnectCount).toBe(0);
   }, 30_000);
 
-  it('leaves the instrument-master cache sourced from the correct provider after the final switch', async () => {
-    await tradingModeService.setMode('LIVE', 'e2e-final');
-    expect(
-      instrumentMasterService.getCache().findByToken('DHAN-TOKEN'),
-    ).toBeDefined();
+  it('removing/disconnecting the broker (switching to PAPER) does not affect Market Data', async () => {
+    await tradingModeService.setMode('LIVE', 'e2e-before-disconnect');
+    const providerTypeBeforeDisconnect =
+      marketDataService.getHealth().providerType;
 
-    await tradingModeService.setMode('PAPER', 'e2e-final-2');
-    expect(
-      instrumentMasterService.getCache().findByToken('MOCK-TOKEN'),
-    ).toBeDefined();
+    await tradingModeService.setMode('PAPER', 'e2e-disconnect');
+
+    expect(marketDataService.getHealth().providerType).toBe(
+      providerTypeBeforeDisconnect,
+    );
+    expect(marketDataService.getHealth().connected).toBe(true);
   }, 15_000);
 
   it('collapses concurrent identical-target switch requests into exactly one real broker login', async () => {
@@ -227,10 +248,5 @@ describe('Trading mode switch cycle (e2e)', () => {
 
     const finalMode = tradingModeService.getCurrentMode();
     expect(['PAPER', 'LIVE']).toContain(finalMode);
-    expect(marketDataService.getHealth().providerType).toBe(
-      finalMode === 'LIVE'
-        ? MarketDataProviderType.DHAN
-        : MarketDataProviderType.MOCK,
-    );
   }, 15_000);
 });

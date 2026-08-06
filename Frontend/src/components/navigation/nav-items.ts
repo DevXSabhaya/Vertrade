@@ -7,5 +7,6 @@ export const navItems = [
   { to: '/app/history', label: 'History' },
   { to: '/app/watchlist', label: 'Watchlist' },
   { to: '/app/risk', label: 'Risk Status' },
+  { to: '/app/brokers', label: 'Broker Manager' },
   { to: '/app/settings', label: 'Settings' },
 ]

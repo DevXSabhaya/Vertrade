@@ -191,13 +191,13 @@ describe('RecoverySnapshotService', () => {
       subscribeToAllHandlers.forEach((h) => h(new TestEvent()));
       expect(scheduler.pendingTimeoutCount()).toBe(1);
 
-      service.onModuleDestroy();
+      void service.onModuleDestroy();
 
       expect(scheduler.pendingTimeoutCount()).toBe(0);
     });
 
     it('never schedules a new capture from an event published after destroy — regression: a stray event during shutdown must not fire a Mongo write after the connection has closed', async () => {
-      service.onModuleDestroy();
+      void service.onModuleDestroy();
 
       subscribeToAllHandlers.forEach((h) => h(new TestEvent()));
 

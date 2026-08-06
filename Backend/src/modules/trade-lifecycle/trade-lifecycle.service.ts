@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { CLOCK } from '@shared/clock/clock.constants';
@@ -69,7 +75,9 @@ export class TradeLifecycleService implements OnModuleInit, OnModuleDestroy {
 
     for (const eventName of TERMINAL_EVENT_NAMES) {
       this.eventBus.subscribe(eventName, (event) => {
-        const promise = this.archive((event as unknown as TerminalTradeEvent).tradeId);
+        const promise = this.archive(
+          (event as unknown as TerminalTradeEvent).tradeId,
+        );
         const task = promise
           .catch((error) => {
             if (this.destroyed) {

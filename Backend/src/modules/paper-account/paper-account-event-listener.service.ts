@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { UserRegisteredEvent } from '@modules/users/events/user-registered.event';
@@ -12,7 +18,9 @@ import { PaperAccountService } from './paper-account.service';
  * `TradeCompletedEvent`/`StopLossHitEvent`.
  */
 @Injectable()
-export class PaperAccountEventListener implements OnModuleInit, OnModuleDestroy {
+export class PaperAccountEventListener
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(PaperAccountEventListener.name);
   private readonly activeTasks = new Set<Promise<unknown>>();
   private destroyed = false;

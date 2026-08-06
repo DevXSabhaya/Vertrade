@@ -8,8 +8,8 @@ import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { SYSTEM_USER_ID } from '@shared/constants/system-user.constant';
 import {
+  ACTIVE_BROKER_NAME,
   BROKER_AUTH,
-  BROKER_NAME_DHAN,
   BROKER_TOKEN_REPOSITORY,
 } from './broker-auth.constants';
 import type { IBrokerAuth } from './interfaces/broker-auth.interface';
@@ -68,6 +68,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     @Inject(BROKER_TOKEN_REPOSITORY)
     private readonly tokenRepository: IBrokerTokenRepository,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
+    @Inject(ACTIVE_BROKER_NAME) private readonly brokerName: string,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -83,7 +84,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
   async restoreSession(): Promise<BrokerSession | null> {
     const stored = await this.tokenRepository.find(
       SYSTEM_USER_ID,
-      BROKER_NAME_DHAN,
+      this.brokerName,
     );
     if (stored) {
       if (this.brokerAuth.validateSession(stored)) {
@@ -210,11 +211,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
       this.reauthRequired = false;
       this.lastRefreshedAt = new Date();
       this.lastAuthEventAt = this.lastRefreshedAt;
-      await this.tokenRepository.save(
-        SYSTEM_USER_ID,
-        BROKER_NAME_DHAN,
-        session,
-      );
+      await this.tokenRepository.save(SYSTEM_USER_ID, this.brokerName, session);
       this.eventBus.publish(new BrokerLoginSucceededEvent(session.clientCode));
       return session;
     } catch (error) {
@@ -236,7 +233,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
       this.lastAuthEventAt = this.lastRefreshedAt;
       await this.tokenRepository.save(
         SYSTEM_USER_ID,
-        BROKER_NAME_DHAN,
+        this.brokerName,
         refreshed,
       );
       this.eventBus.publish(
@@ -248,7 +245,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
       this.currentSession = null;
       this.reauthRequired = true;
       this.lastAuthEventAt = new Date();
-      await this.tokenRepository.clear(SYSTEM_USER_ID, BROKER_NAME_DHAN);
+      await this.tokenRepository.clear(SYSTEM_USER_ID, this.brokerName);
       this.eventBus.publish(new BrokerSessionExpiredEvent(clientCode));
       throw error;
     }
@@ -267,7 +264,7 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
 
     const clientCode = this.currentSession.clientCode;
     await this.brokerAuth.logout(this.currentSession);
-    await this.tokenRepository.clear(SYSTEM_USER_ID, BROKER_NAME_DHAN);
+    await this.tokenRepository.clear(SYSTEM_USER_ID, this.brokerName);
     this.currentSession = null;
     this.reauthRequired = false;
     this.eventBus.publish(new BrokerLogoutCompletedEvent(clientCode));

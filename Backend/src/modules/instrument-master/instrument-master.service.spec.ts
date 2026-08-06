@@ -1,3 +1,4 @@
+import type { ConfigService } from '@core/config/config.service';
 import { InstrumentMasterService } from './instrument-master.service';
 import { InstrumentCache } from './instrument-master.cache';
 import { Instrument } from './entities/instrument.entity';
@@ -30,12 +31,7 @@ function makeInstrument(token = 'TOK1'): Instrument {
 }
 
 describe('InstrumentMasterService', () => {
-  // `provider` is the MOCK-slot fake — the service's default active
-  // provider — driven directly by the pre-existing tests below.
-  // `dhanProvider` is the DHAN-slot fake, exercised by the dedicated
-  // provider-switching tests further down.
   let provider: jest.Mocked<IInstrumentMasterProvider>;
-  let dhanProvider: jest.Mocked<IInstrumentMasterProvider>;
   let repository: jest.Mocked<IInstrumentRepository>;
   let eventBus: jest.Mocked<IEventBus>;
   let cache: InstrumentCache;
@@ -43,7 +39,6 @@ describe('InstrumentMasterService', () => {
 
   beforeEach(() => {
     provider = { brokerName: 'test-broker', fetchInstruments: jest.fn() };
-    dhanProvider = { brokerName: 'dhan', fetchInstruments: jest.fn() };
     repository = {
       saveSnapshot: jest.fn().mockResolvedValue(undefined),
       findLatestSnapshot: jest.fn(),
@@ -56,10 +51,10 @@ describe('InstrumentMasterService', () => {
     cache = new InstrumentCache();
     service = new InstrumentMasterService(
       provider,
-      dhanProvider,
       repository,
       eventBus,
       cache,
+      { instrumentMasterProvider: 'MOCK' } as unknown as ConfigService,
     );
   });
 
@@ -175,95 +170,41 @@ describe('InstrumentMasterService', () => {
     });
   });
 
-  describe('provider switching (initializeForMode/prepare/commit)', () => {
-    it('refresh() uses the MOCK provider by default', async () => {
-      provider.fetchInstruments.mockResolvedValue([makeInstrument()]);
+  describe('provenance mismatch correction on boot', () => {
+    it('does nothing when the restored backup already matches the configured provider', async () => {
+      repository.findLatestSnapshot.mockResolvedValue({
+        version: 1,
+        savedAt: new Date(),
+        instruments: [makeInstrument()],
+        sourceProvider: 'MOCK',
+      });
 
-      await service.refresh();
+      await service.onModuleInit();
+      await Promise.resolve();
+
+      expect(provider.fetchInstruments).not.toHaveBeenCalled();
+    });
+
+    it('triggers a corrective refresh when the restored backup came from a different source', async () => {
+      const dhanConfiguredService = new InstrumentMasterService(
+        provider,
+        repository,
+        eventBus,
+        cache,
+        { instrumentMasterProvider: 'DHAN' } as unknown as ConfigService,
+      );
+      repository.findLatestSnapshot.mockResolvedValue({
+        version: 1,
+        savedAt: new Date(),
+        instruments: [makeInstrument()],
+        sourceProvider: 'MOCK',
+      });
+      provider.fetchInstruments.mockResolvedValue([makeInstrument('FRESH')]);
+
+      await dhanConfiguredService.onModuleInit();
+      await Promise.resolve();
 
       expect(provider.fetchInstruments).toHaveBeenCalledTimes(1);
-      expect(dhanProvider.fetchInstruments).not.toHaveBeenCalled();
-    });
-
-    it('initializeForMode(LIVE) makes refresh() use the DHAN provider', async () => {
-      service.initializeForMode('LIVE');
-      dhanProvider.fetchInstruments.mockResolvedValue([makeInstrument()]);
-
-      await service.refresh();
-
-      expect(dhanProvider.fetchInstruments).toHaveBeenCalledTimes(1);
-      expect(provider.fetchInstruments).not.toHaveBeenCalled();
-    });
-
-    it('prepareRefreshForMode fetches from the target provider without touching the cache', async () => {
-      cache.swap([makeInstrument('EXISTING')]);
-      dhanProvider.fetchInstruments.mockResolvedValue([makeInstrument('NEW')]);
-
-      const fetched = await service.prepareRefreshForMode('LIVE');
-
-      expect(fetched[0]?.token).toBe('NEW');
-      expect(cache.findByToken('EXISTING')).toBeDefined();
-      expect(cache.findByToken('NEW')).toBeUndefined();
-    });
-
-    it('prepareRefreshForMode throws when the target provider returns zero instruments', async () => {
-      dhanProvider.fetchInstruments.mockResolvedValue([]);
-      await expect(service.prepareRefreshForMode('LIVE')).rejects.toThrow();
-    });
-
-    it('commitInstrumentSwitch atomically swaps the cache, flips the active provider, and persists with the correct sourceProvider', async () => {
-      const instruments = [makeInstrument('NEW')];
-
-      await service.commitInstrumentSwitch('LIVE', instruments);
-
-      expect(cache.findByToken('NEW')).toBeDefined();
-      expect(repository.saveSnapshot).toHaveBeenCalledWith(
-        instruments,
-        expect.any(Number),
-        'DHAN',
-      );
-
-      // Subsequent refresh() now hits DHAN, confirming the active provider flipped.
-      dhanProvider.fetchInstruments.mockResolvedValue([
-        makeInstrument('AGAIN'),
-      ]);
-      await service.refresh();
-      expect(dhanProvider.fetchInstruments).toHaveBeenCalledTimes(1);
-      expect(provider.fetchInstruments).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('refreshIfSourceMismatch', () => {
-    it('does nothing when the restored backup already matches the current mode', async () => {
-      repository.findLatestSnapshot.mockResolvedValue({
-        version: 1,
-        savedAt: new Date(),
-        instruments: [makeInstrument()],
-        sourceProvider: 'MOCK',
-      });
-      await service.onModuleInit();
-
-      await service.refreshIfSourceMismatch('PAPER');
-
-      expect(provider.fetchInstruments).not.toHaveBeenCalled();
-      expect(dhanProvider.fetchInstruments).not.toHaveBeenCalled();
-    });
-
-    it('triggers a refresh from the correct provider when the restored backup came from the wrong source', async () => {
-      repository.findLatestSnapshot.mockResolvedValue({
-        version: 1,
-        savedAt: new Date(),
-        instruments: [makeInstrument()],
-        sourceProvider: 'MOCK',
-      });
-      await service.onModuleInit();
-      dhanProvider.fetchInstruments.mockResolvedValue([
-        makeInstrument('FRESH'),
-      ]);
-
-      await service.refreshIfSourceMismatch('LIVE');
-
-      expect(dhanProvider.fetchInstruments).toHaveBeenCalledTimes(1);
     });
 
     it('treats a legacy backup with no sourceProvider (null) as always stale', async () => {
@@ -273,26 +214,12 @@ describe('InstrumentMasterService', () => {
         instruments: [makeInstrument()],
         sourceProvider: null,
       });
-      await service.onModuleInit();
+      provider.fetchInstruments.mockResolvedValue([makeInstrument('FRESH')]);
 
-      await service.refreshIfSourceMismatch('PAPER');
+      await service.onModuleInit();
+      await Promise.resolve();
 
       expect(provider.fetchInstruments).toHaveBeenCalledTimes(1);
-    });
-
-    it('never throws even when the corrective refresh itself fails', async () => {
-      repository.findLatestSnapshot.mockResolvedValue({
-        version: 1,
-        savedAt: new Date(),
-        instruments: [makeInstrument()],
-        sourceProvider: 'MOCK',
-      });
-      await service.onModuleInit();
-      dhanProvider.fetchInstruments.mockRejectedValue(new Error('down'));
-
-      await expect(
-        service.refreshIfSourceMismatch('LIVE'),
-      ).resolves.toBeUndefined();
     });
   });
 });

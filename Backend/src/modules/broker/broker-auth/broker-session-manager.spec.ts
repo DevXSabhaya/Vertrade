@@ -41,7 +41,12 @@ describe('BrokerSessionManager', () => {
       subscribe: jest.fn(),
       subscribeToAll: jest.fn(),
     };
-    manager = new BrokerSessionManager(brokerAuth, tokenRepository, eventBus);
+    manager = new BrokerSessionManager(
+      brokerAuth,
+      tokenRepository,
+      eventBus,
+      'dhan',
+    );
   });
 
   describe('onModuleInit', () => {
@@ -209,7 +214,7 @@ describe('BrokerSessionManager', () => {
       );
     });
 
-    it("shares a single in-flight refresh across concurrent callers instead of calling the broker twice", async () => {
+    it('shares a single in-flight refresh across concurrent callers instead of calling the broker twice', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
       await manager.login();

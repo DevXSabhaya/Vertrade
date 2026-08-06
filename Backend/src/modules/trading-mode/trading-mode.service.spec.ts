@@ -3,8 +3,6 @@ import type { ConfigService } from '@core/config/config.service';
 import type { SettingsService } from '@modules/settings/settings.service';
 import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import type { BrokerTokenRenewalScheduler } from '@modules/broker/broker-auth/broker-token-renewal.scheduler';
-import type { MarketDataService } from '@modules/market-data/market-data.service';
-import type { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
 import { BusinessException } from '@common/exceptions/business.exception';
 import {
   TradingModeService,
@@ -22,29 +20,15 @@ describe('TradingModeService', () => {
   let brokerSessionManager: jest.Mocked<
     Pick<
       BrokerSessionManager,
-      'ensureSession' | 'isSessionValid' | 'logout' | 'bootstrapLiveSession' | 'unloadSession'
+      | 'ensureSession'
+      | 'isSessionValid'
+      | 'logout'
+      | 'bootstrapLiveSession'
+      | 'unloadSession'
     >
   >;
   let brokerTokenRenewalScheduler: jest.Mocked<
     Pick<BrokerTokenRenewalScheduler, 'start' | 'stop'>
-  >;
-  let marketDataService: jest.Mocked<
-    Pick<
-      MarketDataService,
-      | 'initializeForMode'
-      | 'prepareProviderForMode'
-      | 'commitProviderSwitch'
-      | 'abortPreparedProvider'
-    >
-  >;
-  let instrumentMasterService: jest.Mocked<
-    Pick<
-      InstrumentMasterService,
-      | 'initializeForMode'
-      | 'refreshIfSourceMismatch'
-      | 'prepareRefreshForMode'
-      | 'commitInstrumentSwitch'
-    >
   >;
   let publishSpy: jest.Mock;
   let eventBus: IEventBus;
@@ -74,18 +58,6 @@ describe('TradingModeService', () => {
       start: jest.fn(),
       stop: jest.fn(),
     };
-    marketDataService = {
-      initializeForMode: jest.fn(),
-      prepareProviderForMode: jest.fn().mockResolvedValue(undefined),
-      commitProviderSwitch: jest.fn().mockResolvedValue(undefined),
-      abortPreparedProvider: jest.fn().mockResolvedValue(undefined),
-    };
-    instrumentMasterService = {
-      initializeForMode: jest.fn(),
-      refreshIfSourceMismatch: jest.fn().mockResolvedValue(undefined),
-      prepareRefreshForMode: jest.fn().mockResolvedValue([{ token: 'X' }]),
-      commitInstrumentSwitch: jest.fn().mockResolvedValue(undefined),
-    };
     publishSpy = jest.fn();
     eventBus = {
       publish: publishSpy,
@@ -98,8 +70,6 @@ describe('TradingModeService', () => {
       configService as unknown as ConfigService,
       brokerSessionManager as unknown as BrokerSessionManager,
       brokerTokenRenewalScheduler as unknown as BrokerTokenRenewalScheduler,
-      marketDataService as unknown as MarketDataService,
-      instrumentMasterService as unknown as InstrumentMasterService,
       eventBus,
     );
   });
@@ -115,7 +85,7 @@ describe('TradingModeService', () => {
     });
   });
 
-  describe('onModuleInit (bootstrap-once)', () => {
+  describe('onModuleInit', () => {
     it('persists the env default exactly once when nothing has ever been persisted', async () => {
       await service.onModuleInit();
 
@@ -124,6 +94,8 @@ describe('TradingModeService', () => {
         'PAPER',
         'system:bootstrap',
       );
+      expect(brokerSessionManager.bootstrapLiveSession).not.toHaveBeenCalled();
+      expect(brokerTokenRenewalScheduler.start).not.toHaveBeenCalled();
     });
 
     it('never overwrites an already-persisted override, even if the env default differs', async () => {
@@ -135,24 +107,11 @@ describe('TradingModeService', () => {
       expect(settingsService.set).not.toHaveBeenCalled();
       expect(service.getCurrentMode()).toBe('LIVE');
     });
-  });
-
-  describe('onApplicationBootstrap', () => {
-    it('initializes both providers for the current mode and never authenticates Dhan in PAPER', async () => {
-      await service.onApplicationBootstrap();
-
-      expect(marketDataService.initializeForMode).toHaveBeenCalledWith('PAPER');
-      expect(instrumentMasterService.initializeForMode).toHaveBeenCalledWith(
-        'PAPER',
-      );
-      expect(brokerSessionManager.bootstrapLiveSession).not.toHaveBeenCalled();
-      expect(brokerTokenRenewalScheduler.start).not.toHaveBeenCalled();
-    });
 
     it('authenticates completely and starts the renewal scheduler when restored mode is LIVE', async () => {
       settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
 
-      await service.onApplicationBootstrap();
+      await service.onModuleInit();
 
       expect(brokerSessionManager.bootstrapLiveSession).toHaveBeenCalledTimes(
         1,
@@ -166,7 +125,7 @@ describe('TradingModeService', () => {
         new Error('unexpected'),
       );
 
-      await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
       expect(brokerTokenRenewalScheduler.start).toHaveBeenCalledTimes(1);
     });
   });
@@ -180,12 +139,6 @@ describe('TradingModeService', () => {
       expect(brokerSessionManager.ensureSession).not.toHaveBeenCalled();
       expect(brokerSessionManager.unloadSession).toHaveBeenCalledTimes(1);
       expect(brokerTokenRenewalScheduler.stop).toHaveBeenCalledTimes(1);
-      expect(marketDataService.prepareProviderForMode).toHaveBeenCalledWith(
-        'PAPER',
-      );
-      expect(marketDataService.commitProviderSwitch).toHaveBeenCalledWith(
-        'PAPER',
-      );
     });
 
     it('is a no-op (never re-validates or re-publishes) when already in the requested mode', async () => {
@@ -237,37 +190,12 @@ describe('TradingModeService', () => {
       expect(service.getCurrentMode()).toBe('LIVE');
     });
 
-    it('aborts the prepared market-data provider and leaves mode unchanged when the instrument-master prepare fails', async () => {
-      instrumentMasterService.prepareRefreshForMode.mockRejectedValue(
-        new Error('Dhan instrument download failed'),
-      );
-
-      await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow(
-        BusinessException,
-      );
-
-      expect(marketDataService.abortPreparedProvider).toHaveBeenCalledWith(
-        'LIVE',
-      );
-      expect(marketDataService.commitProviderSwitch).not.toHaveBeenCalled();
-      expect(settingsService.set).not.toHaveBeenCalled();
-      expect(service.getCurrentMode()).toBe('PAPER');
-    });
-
-    it('never commits mode/cache/provider changes out of order — settings persist before instrument/market commits, which happen before the event publishes', async () => {
+    it('persists settings before publishing the mode-changed event', async () => {
       const callOrder: string[] = [];
       settingsService.set.mockImplementation((key: string, value: unknown) => {
         settingsStore.set(key, value);
         callOrder.push('settings');
         return Promise.resolve({ key, value } as never);
-      });
-      instrumentMasterService.commitInstrumentSwitch.mockImplementation(() => {
-        callOrder.push('instrument-commit');
-        return Promise.resolve();
-      });
-      marketDataService.commitProviderSwitch.mockImplementation(() => {
-        callOrder.push('market-data-commit');
-        return Promise.resolve();
       });
       publishSpy.mockImplementation(() => {
         callOrder.push('event');
@@ -275,12 +203,7 @@ describe('TradingModeService', () => {
 
       await service.setMode('LIVE', 'user-1');
 
-      expect(callOrder).toEqual([
-        'settings',
-        'instrument-commit',
-        'market-data-commit',
-        'event',
-      ]);
+      expect(callOrder).toEqual(['settings', 'event']);
     });
 
     describe('single-flight / concurrency', () => {
@@ -303,21 +226,13 @@ describe('TradingModeService', () => {
         expect(settingsService.set).toHaveBeenCalledTimes(1);
       });
 
-      it('serializes different-target concurrent calls rather than interleaving their prepare/commit phases', async () => {
+      it('serializes different-target concurrent calls rather than interleaving', async () => {
         const first = service.setMode('LIVE', 'user-1');
         const second = service.setMode('PAPER', 'user-2');
 
         await Promise.all([first, second]);
 
         expect(service.getCurrentMode()).toBe('PAPER');
-        expect(marketDataService.commitProviderSwitch).toHaveBeenNthCalledWith(
-          1,
-          'LIVE',
-        );
-        expect(marketDataService.commitProviderSwitch).toHaveBeenNthCalledWith(
-          2,
-          'PAPER',
-        );
       });
 
       it('a failed switch does not block a subsequent differently-targeted switch from proceeding', async () => {
@@ -338,9 +253,6 @@ describe('TradingModeService', () => {
           await service.setMode(mode, `user-${i}`);
           expect(service.getCurrentMode()).toBe(mode);
         }
-        expect(marketDataService.commitProviderSwitch).toHaveBeenCalledTimes(
-          200,
-        );
       });
     });
   });
