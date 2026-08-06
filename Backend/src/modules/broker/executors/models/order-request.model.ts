@@ -17,5 +17,7 @@ export class OrderRequest {
     public readonly price?: number,
     /** Carries `Trade.metadata` through (e.g. `liveTradingConfirmed`) — read by `LiveOrderSafetyGateService` in `DhanExecutor`. Never read by `PaperExecutor`. */
     public readonly metadata?: Readonly<Record<string, unknown>>,
+    /** Required for `SL`/`SL_M` — the price at which the stop activates. Unused for `MARKET`/`LIMIT`. */
+    public readonly triggerPrice?: number,
   ) {}
 }

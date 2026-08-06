@@ -1,1 +1,2 @@
 export const ORDER_EXECUTOR = Symbol('ORDER_EXECUTOR');
+export const PAPER_EXECUTION_CONFIG = Symbol('PAPER_EXECUTION_CONFIG');

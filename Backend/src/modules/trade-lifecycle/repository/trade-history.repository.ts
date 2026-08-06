@@ -4,6 +4,7 @@ import type { Model } from 'mongoose';
 import type { ITradeHistoryRepository } from '../interfaces/trade-history-repository.interface';
 import type { TradeRecord } from '../models/trade-record.model';
 import type { TrailingConfiguration } from '../models/trailing-configuration.model';
+import { calculateTradeCharges } from '../domain/trade-charges.util';
 import {
   TradeHistoryDocumentSchema,
   type TradeHistoryDocument,
@@ -42,6 +43,17 @@ export class TradeHistoryRepository implements ITradeHistoryRepository {
   }
 
   private toRecord(doc: TradeHistoryDocument): TradeRecord {
+    // Computed at read-time from already-persisted fields, exactly like
+    // TradeRecordComposer does for a live trade — never stored as a second,
+    // potentially-stale copy (same philosophy as the rest of this module).
+    const entryValue = (doc.averagePrice ?? 0) * doc.filledQuantity;
+    const exitValue = (doc.exitPrice ?? 0) * doc.exitedQuantity;
+    const charges = calculateTradeCharges(doc.direction, entryValue, exitValue);
+    const netPnl =
+      doc.filledQuantity === 0
+        ? null
+        : (doc.realizedPnl ?? 0) + (doc.unrealizedPnl ?? 0) - charges.total;
+
     return {
       tradeId: doc.tradeId,
       signalId: doc.signalId,
@@ -72,6 +84,8 @@ export class TradeHistoryRepository implements ITradeHistoryRepository {
       riskReward: doc.riskReward,
       realizedPnl: doc.realizedPnl,
       unrealizedPnl: doc.unrealizedPnl,
+      charges,
+      netPnl,
       exitReason: doc.exitReason,
       brokerMetadata: doc.brokerMetadata as Record<string, unknown>,
       positionDurationMs: doc.positionDurationMs,
