@@ -7,6 +7,8 @@ import type { TradeValidationRequest } from '@modules/trade-validation/models/tr
 import type { QueueItemSnapshot } from '@modules/order-queue/models/queue-item-snapshot';
 import { TradeManager } from '@modules/trade-lifecycle/trade-manager.service';
 import type { TradeRecord } from '@modules/trade-lifecycle/models/trade-record.model';
+import type { NetPosition } from '@modules/trade-lifecycle/models/net-position.model';
+import { aggregateNetPositions } from '@modules/trade-lifecycle/domain/net-position-aggregator';
 import { PaperAccountService } from '@modules/paper-account/paper-account.service';
 import type { PaperAccountSummary } from '@modules/paper-account/models/paper-account.model';
 import type { TradeDirection } from '@modules/trading-engine/domain/trade-direction.enum';
@@ -231,6 +233,20 @@ export class PaperTradingService {
         return this.toView(o, record);
       }),
     );
+  }
+
+  /**
+   * The "Professional Position Book" view: this user's open Paper trades
+   * netted per instrument (multiple lots on the same instrument collapse
+   * into one row with a volume-weighted average price), rather than one
+   * row per trade — see `aggregateNetPositions`.
+   */
+  async getNetPositions(userId: string): Promise<NetPosition[]> {
+    const views = await this.getActiveTrades(userId);
+    const records = views
+      .map((view) => view.trade)
+      .filter((trade): trade is TradeRecord => trade !== null);
+    return aggregateNetPositions(records);
   }
 
   async getHistory(

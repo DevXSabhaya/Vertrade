@@ -350,4 +350,101 @@ describe('PaperTradingService', () => {
       expect(await service.hasOpenTrades('user-1')).toBe(true);
     });
   });
+
+  describe('getNetPositions', () => {
+    const ZERO_CHARGES = {
+      brokerage: 0,
+      stt: 0,
+      exchangeCharges: 0,
+      gst: 0,
+      stampDuty: 0,
+      sebiCharges: 0,
+      total: 0,
+    };
+
+    function tradeRecord(overrides: Partial<TradeRecord> = {}): TradeRecord {
+      return {
+        tradeId: 'trade-1',
+        signalId: null,
+        brokerOrderId: null,
+        brokerPositionId: null,
+        instrument: 'RELIANCE-EQ',
+        exchange: 'NSE',
+        token: 'TOKEN-RELIANCE',
+        direction: TradeDirection.LONG,
+        entryPrice: 500,
+        quantity: 10,
+        filledQuantity: 10,
+        openQuantity: 10,
+        exitedQuantity: 0,
+        averagePrice: 500,
+        exitPrice: null,
+        status: 'ACTIVE' as never,
+        lifecycleStage: 'ACTIVE' as never,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        targets: [520],
+        currentTarget: null,
+        stopLoss: 490,
+        currentStopLoss: 490,
+        trailingEnabled: false,
+        trailingConfiguration: null,
+        riskReward: null,
+        realizedPnl: null,
+        unrealizedPnl: 200,
+        charges: ZERO_CHARGES,
+        netPnl: 195,
+        exitReason: null,
+        brokerMetadata: {},
+        positionDurationMs: 0,
+        mode: 'PAPER',
+        ...overrides,
+      };
+    }
+
+    it("nets the requesting user's own open trades by instrument", async () => {
+      const { service, ownershipService } = buildService({
+        tradeManager: { getTrade: jest.fn().mockResolvedValue(tradeRecord()) },
+      });
+      const created = await service.createTrade('user-1', dto());
+      const ownership = await ownershipService.requireOwned(
+        created.id,
+        'user-1',
+      );
+      await ownershipService.markOpen(ownership, 'trade-1');
+
+      const positions = await service.getNetPositions('user-1');
+
+      expect(positions).toHaveLength(1);
+      expect(positions[0]).toMatchObject({
+        instrumentToken: 'TOKEN-RELIANCE',
+        netQuantity: 10,
+        direction: TradeDirection.LONG,
+      });
+    });
+
+    it("never includes another user's open trades", async () => {
+      const { service, ownershipService } = buildService({
+        tradeManager: { getTrade: jest.fn().mockResolvedValue(tradeRecord()) },
+      });
+      await service.createTrade('user-1', dto());
+      const created2 = await service.createTrade('user-2', dto());
+      const ownership2 = await ownershipService.requireOwned(
+        created2.id,
+        'user-2',
+      );
+      await ownershipService.markOpen(ownership2, 'trade-1');
+
+      const user1Positions = await service.getNetPositions('user-1');
+      const user2Positions = await service.getNetPositions('user-2');
+
+      expect(user1Positions).toHaveLength(0);
+      expect(user2Positions).toHaveLength(1);
+    });
+
+    it('returns an empty array when the user has no open trades', async () => {
+      const { service } = buildService({});
+      expect(await service.getNetPositions('user-1')).toEqual([]);
+    });
+  });
 });

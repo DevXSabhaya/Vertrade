@@ -2,6 +2,7 @@ import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { CurrentUser } from '@modules/auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '@modules/auth/models/authenticated-user.model';
+import type { NetPosition } from '@modules/trade-lifecycle/models/net-position.model';
 import { PaperTradingService } from '../paper-trading.service';
 import type { PaperTradeView } from '../models/paper-trade-view.model';
 
@@ -23,6 +24,14 @@ export class PaperPositionsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<PaperTradeView[]> {
     return this.paperTradingService.getActiveTrades(user.userId);
+  }
+
+  /** Registered before `:id` so `/net` is never swallowed by the id-param route. */
+  @Get('net')
+  async netPositions(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<NetPosition[]> {
+    return this.paperTradingService.getNetPositions(user.userId);
   }
 
   @Get(':id')
