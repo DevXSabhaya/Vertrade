@@ -136,7 +136,7 @@ export class QueueWorker implements OnModuleDestroy {
 
     try {
       const tradeSnapshot = this.tradingEngineService.createTrade(
-        this.buildCreateTradeParams(item),
+        await this.buildCreateTradeParams(item),
       );
 
       item.markSubmitted(tradeSnapshot.id, this.clock);
@@ -227,7 +227,15 @@ export class QueueWorker implements OnModuleDestroy {
    * one moment a trade's mode is ever decided; `Trade` pins it for its
    * entire lifecycle from here on (see `Trade.mode`'s own docstring).
    */
-  private buildCreateTradeParams(item: QueueItem): CreateTradeParams {
+  private async buildCreateTradeParams(
+    item: QueueItem,
+  ): Promise<CreateTradeParams> {
+    const mode = await this.tradingModeService.getCurrentMode(item.userId);
+    const brokerAccountId =
+      mode === 'LIVE'
+        ? await this.tradingModeService.getSelectedBrokerAccountId(item.userId)
+        : null;
+
     return {
       direction: item.request.direction,
       exchange: item.resolvedInstrument.exchange,
@@ -236,7 +244,8 @@ export class QueueWorker implements OnModuleDestroy {
       quantity: item.request.quantity,
       entryTriggerPrice: item.request.entryTriggerPrice,
       initialStopLoss: item.request.initialStopLoss,
-      mode: this.tradingModeService.getCurrentMode(),
+      mode,
+      brokerAccountId,
       targets: item.request.targets,
       metadata: item.request.metadata,
     };

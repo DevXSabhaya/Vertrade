@@ -50,6 +50,7 @@ describe('LocalPositionProvider', () => {
       initialStopLoss: 95,
       targets: [110],
       mode: 'PAPER',
+      brokerAccountId: null,
     });
 
     const positions = provider.getOpenPositions();
@@ -68,6 +69,7 @@ describe('LocalPositionProvider', () => {
       initialStopLoss: 95,
       targets: [110],
       mode: 'PAPER',
+      brokerAccountId: null,
     });
     await tradingEngineService.cancelTrade(snapshot.id, 'test');
 

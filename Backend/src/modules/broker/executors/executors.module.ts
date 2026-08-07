@@ -2,9 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@core/config/config.module';
 import { FeatureFlagsModule } from '@core/feature-flags/feature-flags.module';
 import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
-import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { FetchBrokerHttpClient } from '@modules/broker/broker-auth/fetch-broker-http-client';
-import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
+import { BrokerAccountPersistenceModule } from '@modules/broker/broker-account/broker-account-persistence.module';
 import { PaperExecutor } from './paper.executor';
 import { DhanExecutor } from './dhan/dhan.executor';
 import { LiveOrderSafetyGateService } from './live-order-safety-gate.service';
@@ -19,23 +18,26 @@ import { DEFAULT_PAPER_EXECUTION_CONFIG } from './models/paper-execution-config.
 /**
  * The Trading Engine depends only on the IOrderExecutor interface, never on
  * a concrete executor class. `ORDER_EXECUTOR` resolves to `RoutingOrderExecutor`,
- * which picks Paper vs Live per call from `TradingModeService`'s current
- * (persisted, runtime-switchable) mode — for consumers that should always
- * see "whatever the deployment's mode is right now" (e.g. Position
- * Reconciliation). `TradingEngineService` itself does NOT use this token —
- * it pins each trade's executor once at creation time instead, so an
- * in-flight trade can never have its entry and exit legs split across Paper
- * and a real broker just because an operator switched modes mid-trade (see
- * `TradingEngineService.executorFor`). Both concrete classes remain exported
- * so callers (e.g. audit logging of which executor produced an order) can
- * still inject either directly.
+ * which picks Paper vs Live per call purely from whether an `accountId` is
+ * present — never from a "deployment's current mode" (trading mode is
+ * per-user now; there is no such global signal). `TradingEngineService`
+ * itself does NOT use this token — it pins each trade's executor once at
+ * creation time instead (see `TradingEngineService.executorFor`). Both
+ * concrete classes remain exported so callers (e.g. audit logging of which
+ * executor produced an order) can still inject either directly.
+ *
+ * Imports `BrokerAccountPersistenceModule` (not the full
+ * `BrokerAccountModule`) deliberately: `DhanExecutor` needs only the
+ * `IBrokerAccountRepository` to read a resolved account's own credentials —
+ * importing the full `BrokerAccountModule` here would create a module cycle
+ * (`BrokerAccountModule` -> `BrokerRegistryModule` -> `ExecutorsModule`).
  */
 @Module({
   imports: [
     BrokerAuthModule,
+    BrokerAccountPersistenceModule,
     ConfigModule,
     FeatureFlagsModule,
-    TradingModeModule,
   ],
   providers: [
     PaperExecutor,
@@ -47,7 +49,6 @@ import { DEFAULT_PAPER_EXECUTION_CONFIG } from './models/paper-execution-config.
       provide: PAPER_EXECUTION_CONFIG,
       useValue: DEFAULT_PAPER_EXECUTION_CONFIG,
     },
-    BrokerCredentialsProvider,
     { provide: ORDER_HTTP_CLIENT, useClass: FetchBrokerHttpClient },
     LiveOrderSafetyGateService,
     DhanExecutor,

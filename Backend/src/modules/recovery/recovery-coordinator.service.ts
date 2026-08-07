@@ -33,6 +33,8 @@ import type { IRecoveryHistoryRepository } from './interfaces/recovery-history-r
 import type { IRecoveryErrorRepository } from './interfaces/recovery-error-repository.interface';
 import { RecoveryAlreadyRunningException } from './exceptions/recovery-already-running.exception';
 import { PositionReconciliationService } from '@modules/position-reconciliation/position-reconciliation.service';
+import { USER_TRADING_PREFERENCE_REPOSITORY } from '@modules/trading-mode/trading-mode.constants';
+import type { IUserTradingPreferenceRepository } from '@modules/trading-mode/repository/user-trading-preference-repository.interface';
 import { RiskPolicyService } from '@modules/risk-management/risk-policy.service';
 import { KillSwitchService } from '@modules/risk-management/kill-switch.service';
 import { EmergencyStopService } from '@modules/risk-management/emergency-stop.service';
@@ -82,6 +84,8 @@ export class RecoveryCoordinator {
     private readonly historyRepository: IRecoveryHistoryRepository,
     @Inject(RECOVERY_ERROR_REPOSITORY)
     private readonly errorRepository: IRecoveryErrorRepository,
+    @Inject(USER_TRADING_PREFERENCE_REPOSITORY)
+    private readonly userTradingPreferenceRepository: IUserTradingPreferenceRepository,
   ) {}
 
   isRunning(): boolean {
@@ -411,17 +415,31 @@ export class RecoveryCoordinator {
     return Promise.resolve();
   }
 
+  /**
+   * Best-effort, per-account: bootstraps a session for every user currently
+   * persisted as LIVE with a selected broker account —
+   * `BrokerSessionManager.bootstrapLiveSession` already never throws (a
+   * failed bootstrap leaves that one account in REAUTH_REQUIRED), so one
+   * account's bad/expired credentials can never abort recovery for market
+   * data, paper trading, or any other user's account. There is no single
+   * global "the broker" to gate the rest of this pipeline on anymore.
+   */
   private async stepRestoreBrokerAuthentication(): Promise<void> {
-    await this.brokerSessionManager.ensureSession();
+    const liveUsers =
+      await this.userTradingPreferenceRepository.findAllLiveWithBroker();
+    await Promise.all(
+      liveUsers
+        .filter((pref) => pref.selectedBrokerAccountId !== null)
+        .map((pref) =>
+          this.brokerSessionManager.bootstrapLiveSession(
+            pref.selectedBrokerAccountId as string,
+          ),
+        ),
+    );
   }
 
+  /** A no-op checkpoint now — see `stepRestoreBrokerAuthentication`'s docstring for why there is no single session left to gate on. */
   private stepReconnectBroker(): Promise<void> {
-    // There is no separate broker "connect" call beyond holding a valid
-    // session (Phase 4's BrokerSessionManager never exposes one) — a valid
-    // session IS the connected state for a REST-only broker integration.
-    if (!this.brokerSessionManager.isSessionValid()) {
-      throw new Error('Broker session is not valid after authentication');
-    }
     return Promise.resolve();
   }
 

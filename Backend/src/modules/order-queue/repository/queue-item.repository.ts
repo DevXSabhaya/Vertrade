@@ -26,6 +26,7 @@ export class QueueItemRepository implements IQueueItemRepository {
         {
           $set: {
             itemId: snapshot.id,
+            userId: snapshot.userId,
             idempotencyKey: snapshot.idempotencyKey,
             orderType: snapshot.orderType,
             state: snapshot.state,
@@ -66,6 +67,7 @@ export class QueueItemRepository implements IQueueItemRepository {
   private toSnapshot(doc: QueueItemDocument): QueueItemSnapshot {
     return {
       id: doc.itemId,
+      userId: doc.userId,
       idempotencyKey: doc.idempotencyKey,
       orderType: doc.orderType,
       state: doc.state,

@@ -1,167 +1,226 @@
-import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { ConfigService } from '@core/config/config.service';
-import { SettingsService } from '@modules/settings/settings.service';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
-import { BrokerTokenRenewalScheduler } from '@modules/broker/broker-auth/broker-token-renewal.scheduler';
+import { BrokerAccountService } from '@modules/broker/broker-account/broker-account.service';
 import { BusinessException } from '@common/exceptions/business.exception';
+import { BrokerAccountNotFoundException } from '@modules/broker/broker-account/exceptions/broker-account-not-found.exception';
 import type { TradingMode } from '@modules/trade-lifecycle/models/trade-record.model';
 import { TradingModeChangedEvent } from './events/trading-mode-changed.event';
-import { BrokerSessionExpiredException } from '@modules/broker/broker-auth/exceptions/broker-session-expired.exception';
+import { USER_TRADING_PREFERENCE_REPOSITORY } from './trading-mode.constants';
+import type { IUserTradingPreferenceRepository } from './repository/user-trading-preference-repository.interface';
+import type { UserTradingPreference } from './models/user-trading-preference.model';
 
 /**
- * SettingsService key — a single shared key, not per-user: this deployment has one live broker session/mode for the whole process, matching the rest of the broker architecture (SYSTEM_USER_ID). */
-export const TRADING_MODE_SETTING_KEY = 'TRADING_MODE_OVERRIDE';
-
-/**
- * The single source of truth for "what trading mode is this deployment in
- * right now", AND the single orchestrator of everything that must change
- * when that mode switches — which, per Core Architecture Principle #4, is
- * ONLY order execution and the broker session that supports it. Market Data
- * and Instrument Master are never touched here: they are wired to a single
- * provider independent of trading mode (see MarketDataModule /
- * InstrumentMasterModule), so Paper and Live always observe identical prices
- * and instruments (Principle #5).
+ * The single source of truth for "what trading mode is THIS USER in right
+ * now" — per-user, never a single deployment-wide value. Each user
+ * independently chooses Paper or Live and, when Live, which of their own
+ * connected `BrokerAccount`s executes their trades
+ * (`selectedBrokerAccountId`). Switching one user's mode or broker has zero
+ * effect on any other user.
  *
- * `TRADING_MODE` (env) is consulted only as the bootstrap seed for the very
- * first boot ever — `onModuleInit` persists it into Settings exactly once
- * if no override exists yet, so a later change to the Render env var has no
- * effect on an already-bootstrapped deployment (runtime state always wins
- * over env after that point). `getCurrentMode()`'s `?? configService.tradingMode`
- * fallback only matters in the narrow window before that one-time bootstrap
- * write lands (or in a unit test that constructs this service without
- * calling `onModuleInit`); once persisted, Settings' cache always has a
- * value.
+ * `TRADING_MODE` (env) is consulted only as the bootstrap default for a
+ * user who has never set a preference — `getCurrentMode` falls back to it
+ * when no `UserTradingPreference` row exists yet.
  *
- * Mode switching is atomic: `setMode` persists the new mode and then
- * establishes/tears down the broker session used for LIVE order execution.
- * A single-flight guard (`pendingSwitch`) ensures concurrent `setMode` calls
- * never run two switch sequences at once — they collapse onto one real
- * switch.
+ * Mode switching is atomic per user: `setMode` validates (LIVE requires an
+ * owned, real, currently-authenticatable broker account) and only then
+ * persists. A per-user single-flight guard ensures concurrent `setMode`
+ * calls for the same user never run two switch sequences at once — they
+ * collapse onto one real switch. Different users' switches are always
+ * fully independent.
  */
 @Injectable()
-export class TradingModeService implements OnModuleInit {
+export class TradingModeService {
   private readonly logger = new Logger(TradingModeService.name);
-  private pendingSwitch: Promise<TradingMode> | null = null;
+  private readonly pendingSwitch = new Map<string, Promise<TradingMode>>();
 
   constructor(
-    private readonly settingsService: SettingsService,
+    @Inject(USER_TRADING_PREFERENCE_REPOSITORY)
+    private readonly preferenceRepository: IUserTradingPreferenceRepository,
     private readonly configService: ConfigService,
     private readonly brokerSessionManager: BrokerSessionManager,
-    private readonly brokerTokenRenewalScheduler: BrokerTokenRenewalScheduler,
+    private readonly brokerAccountService: BrokerAccountService,
     @Inject(EVENT_BUS) private readonly eventBus: IEventBus,
   ) {}
 
-  /** Bootstrap-once: seeds the persisted mode from TRADING_MODE only if nothing has ever been persisted. Never runs again after the first successful write. */
-  async onModuleInit(): Promise<void> {
-    if (this.settingsService.get(TRADING_MODE_SETTING_KEY) === undefined) {
-      await this.settingsService.set(
-        TRADING_MODE_SETTING_KEY,
-        this.configService.tradingMode,
-        'system:bootstrap',
-      );
-    }
-
-    if (this.getCurrentMode() === 'LIVE') {
-      try {
-        await this.brokerSessionManager.bootstrapLiveSession();
-      } catch (error) {
-        // bootstrapLiveSession is documented to swallow its own failures —
-        // this catch is defense-in-depth only: process boot must never
-        // crash because of broker connectivity, full stop.
-        this.logger.error(
-          `Unexpected error during LIVE-mode broker bootstrap: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      }
-      this.brokerTokenRenewalScheduler.start();
-    }
+  async getCurrentMode(userId: string): Promise<TradingMode> {
+    const preference = await this.preferenceRepository.find(userId);
+    return preference?.tradingMode ?? this.configService.tradingMode;
   }
 
-  /** Synchronous — SettingsService's cache is loaded once at boot and kept current on every write, so this never blocks on a DB round trip. */
-  getCurrentMode(): TradingMode {
+  async getSelectedBrokerAccountId(userId: string): Promise<string | null> {
+    const preference = await this.preferenceRepository.find(userId);
+    return preference?.selectedBrokerAccountId ?? null;
+  }
+
+  async getPreference(userId: string): Promise<UserTradingPreference> {
+    const preference = await this.preferenceRepository.find(userId);
     return (
-      this.settingsService.get<TradingMode>(TRADING_MODE_SETTING_KEY) ??
-      this.configService.tradingMode
+      preference ?? {
+        userId,
+        tradingMode: this.configService.tradingMode,
+        selectedBrokerAccountId: null,
+        updatedAt: new Date(0),
+      }
     );
   }
 
   /**
-   * Switches which executor new orders route through. A single-flight guard
-   * collapses concurrent calls: identical-target calls share one real
-   * switch; different-target calls run strictly after the in-flight one
-   * finishes (never interleaved), regardless of whether that prior attempt
-   * succeeded or failed.
+   * Switches this user's mode.
+   * - `PAPER`: always allowed, clears `selectedBrokerAccountId`, tears down
+   *   this user's live session (if any) for the account they were using.
+   * - `LIVE`: requires `brokerAccountId` — an account this user actually
+   *   owns, whose broker is implemented, and whose credentials pass a real
+   *   authentication check right now (via `BrokerAccountService.reconnect`,
+   *   the same real Dhan validation the Broker Manager UI already uses — no
+   *   faked success). A user with zero saved broker accounts gets the exact
+   *   "connect a broker first" rejection, never a silent fallback.
    */
-  async setMode(mode: TradingMode, changedBy: string): Promise<TradingMode> {
-    if (this.pendingSwitch) {
-      return this.pendingSwitch
+  async setMode(
+    userId: string,
+    mode: TradingMode,
+    changedBy: string,
+    brokerAccountId?: string,
+  ): Promise<TradingMode> {
+    const pending = this.pendingSwitch.get(userId);
+    if (pending) {
+      return pending
         .catch(() => undefined)
-        .then(() => this.setMode(mode, changedBy));
+        .then(() => this.setMode(userId, mode, changedBy, brokerAccountId));
     }
 
-    const previousMode = this.getCurrentMode();
-    if (mode === previousMode) {
-      return mode;
-    }
-
-    this.pendingSwitch = this.performSwitch(mode, previousMode, changedBy);
+    const switchPromise = this.performSwitch(
+      userId,
+      mode,
+      changedBy,
+      brokerAccountId,
+    );
+    this.pendingSwitch.set(userId, switchPromise);
     try {
-      return await this.pendingSwitch;
+      return await switchPromise;
     } finally {
-      this.pendingSwitch = null;
+      this.pendingSwitch.delete(userId);
     }
   }
 
-  private async performSwitch(
-    mode: TradingMode,
-    previousMode: TradingMode,
+  /**
+   * "Change Broker" — stays in LIVE, switches which of this user's own
+   * accounts executes their trades, without touching mode or any other
+   * user's state. Runs the same real validation as switching into LIVE.
+   */
+  async setSelectedBroker(
+    userId: string,
+    brokerAccountId: string,
     changedBy: string,
-  ): Promise<TradingMode> {
-    if (mode === 'LIVE') {
-      await this.assertLiveModeIsSafe();
+  ): Promise<UserTradingPreference> {
+    const current = await this.getPreference(userId);
+    if (current.tradingMode !== 'LIVE') {
+      throw new BusinessException(
+        'Switch to Live Trading before selecting a broker.',
+      );
     }
 
-    await this.settingsService.set(TRADING_MODE_SETTING_KEY, mode, changedBy);
+    await this.assertLiveModeIsSafe(userId, brokerAccountId);
+
+    const updated = await this.preferenceRepository.upsert(userId, {
+      tradingMode: 'LIVE',
+      selectedBrokerAccountId: brokerAccountId,
+    });
+
+    this.logger.log(
+      `Live broker changed for user ${userId}: ${current.selectedBrokerAccountId ?? 'none'} -> ${brokerAccountId} (by ${changedBy})`,
+    );
+    this.eventBus.publish(
+      new TradingModeChangedEvent(
+        userId,
+        'LIVE',
+        'LIVE',
+        changedBy,
+        brokerAccountId,
+      ),
+    );
+    return updated;
+  }
+
+  private async performSwitch(
+    userId: string,
+    mode: TradingMode,
+    changedBy: string,
+    brokerAccountId?: string,
+  ): Promise<TradingMode> {
+    const previous = await this.getPreference(userId);
+    if (
+      mode === previous.tradingMode &&
+      (mode === 'PAPER' || brokerAccountId === previous.selectedBrokerAccountId)
+    ) {
+      return mode;
+    }
 
     if (mode === 'LIVE') {
-      this.brokerTokenRenewalScheduler.start();
-    } else {
-      this.brokerTokenRenewalScheduler.stop();
-      this.brokerSessionManager.unloadSession();
+      await this.assertLiveModeIsSafe(userId, brokerAccountId);
+    }
+
+    await this.preferenceRepository.upsert(userId, {
+      tradingMode: mode,
+      selectedBrokerAccountId:
+        mode === 'LIVE' ? (brokerAccountId as string) : null,
+    });
+
+    if (mode === 'PAPER' && previous.selectedBrokerAccountId) {
+      this.brokerSessionManager.unloadSession(previous.selectedBrokerAccountId);
     }
 
     this.logger.log(
-      `Trading mode changed: ${previousMode} -> ${mode} (by ${changedBy})`,
+      `Trading mode changed for user ${userId}: ${previous.tradingMode} -> ${mode} (by ${changedBy})`,
     );
     this.eventBus.publish(
-      new TradingModeChangedEvent(mode, previousMode, changedBy),
+      new TradingModeChangedEvent(
+        userId,
+        mode,
+        previous.tradingMode,
+        changedBy,
+        mode === 'LIVE' ? (brokerAccountId as string) : null,
+      ),
     );
     return mode;
   }
 
   /**
-   * LIVE requires both real broker credentials configured for this
-   * deployment (a fast, specific failure for the common "Paper-only
-   * deployment" case) and a broker session `BrokerSessionManager` can
-   * actually establish right now (the real safety check — credentials
-   * that are present but wrong/expired/placeholder fail here instead of
-   * only being discovered when the first live order is attempted).
+   * LIVE requires: at least one owned broker account (a fast, specific
+   * failure for the common "no broker connected yet" case, worded exactly
+   * as the product spec requires), a specific account selected among them,
+   * and that account's credentials passing a real authentication check
+   * right now — reusing `BrokerAccountService.reconnect`, which only
+   * re-authenticates when needed and always does a real broker API call
+   * when it does, never a fabricated success.
    */
-  private async assertLiveModeIsSafe(): Promise<void> {
-    if (!this.configService.hasDhanCredentials) {
+  private async assertLiveModeIsSafe(
+    userId: string,
+    brokerAccountId?: string,
+  ): Promise<void> {
+    const accounts = await this.brokerAccountService.listAccounts(userId);
+    if (accounts.length === 0) {
       throw new BusinessException(
-        'Cannot switch to LIVE mode: no Dhan broker credentials are configured for this deployment.',
+        'You need to connect a broker before enabling Live Trading.',
       );
     }
 
+    if (!brokerAccountId) {
+      throw new BusinessException(
+        'Select a broker account to enable Live Trading.',
+      );
+    }
+
+    const account = accounts.find((a) => a.accountId === brokerAccountId);
+    if (!account) {
+      throw new BrokerAccountNotFoundException(brokerAccountId);
+    }
+
     try {
-      await this.brokerSessionManager.ensureSession();
+      await this.brokerAccountService.reconnect(userId, brokerAccountId);
     } catch (error) {
-      if (error instanceof BrokerSessionExpiredException) {
-        // Do not throw! Let the switch complete so the user enters LIVE mode, but the status is REAUTH_REQUIRED.
-        return;
-      }
       const reason = error instanceof Error ? error.message : 'unknown error';
       throw new BusinessException(
         `Cannot switch to LIVE mode: broker authentication failed (${reason}).`,

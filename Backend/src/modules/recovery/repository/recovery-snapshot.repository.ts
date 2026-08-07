@@ -5,6 +5,7 @@ import type { TradeSnapshot } from '@modules/trading-engine/domain/trade-snapsho
 import type { QueueItemSnapshot } from '@modules/order-queue/models/queue-item-snapshot';
 import type { IRecoverySnapshotRepository } from '../interfaces/recovery-snapshot-repository.interface';
 import type {
+  RecoveryActiveBrokerSession,
   RecoveryLastTick,
   RecoveryMarketSubscription,
   RecoverySnapshot,
@@ -34,7 +35,7 @@ export class RecoverySnapshotRepository implements IRecoverySnapshotRepository {
             idempotencyKeys: snapshot.idempotencyKeys,
             marketSubscriptions: snapshot.marketSubscriptions,
             engineStateSummary: snapshot.engineStateSummary,
-            brokerSessionClientCode: snapshot.brokerSessionClientCode,
+            activeBrokerSessions: snapshot.activeBrokerSessions,
             lastTick: snapshot.lastTick,
           },
         },
@@ -58,7 +59,8 @@ export class RecoverySnapshotRepository implements IRecoverySnapshotRepository {
       marketSubscriptions:
         doc.marketSubscriptions as RecoveryMarketSubscription[],
       engineStateSummary: doc.engineStateSummary,
-      brokerSessionClientCode: doc.brokerSessionClientCode,
+      activeBrokerSessions:
+        doc.activeBrokerSessions as RecoveryActiveBrokerSession[],
       lastTick: doc.lastTick as unknown as RecoveryLastTick | null,
     };
   }

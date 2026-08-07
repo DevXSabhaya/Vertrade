@@ -127,6 +127,7 @@ function tradeParams(
     initialStopLoss: 95,
     targets: [110, 120, 135, 150],
     mode: 'PAPER',
+    brokerAccountId: null,
     ...overrides,
   };
 }
@@ -660,7 +661,11 @@ describe('TradingEngineService', () => {
 
     it("routes a LIVE-mode trade's entry to DhanExecutor only, never PaperExecutor", async () => {
       const snapshot = routingService.createTrade(
-        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-LIVE' }),
+        tradeParams({
+          mode: 'LIVE',
+          instrumentToken: 'TOKEN-LIVE',
+          brokerAccountId: 'acc-1',
+        }),
       );
 
       await routingService.handleMarketPriceUpdate('TOKEN-LIVE', 100);
@@ -677,7 +682,11 @@ describe('TradingEngineService', () => {
         tradeParams({ mode: 'PAPER', instrumentToken: 'TOKEN-A' }),
       );
       const liveTrade = routingService.createTrade(
-        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-B' }),
+        tradeParams({
+          mode: 'LIVE',
+          instrumentToken: 'TOKEN-B',
+          brokerAccountId: 'acc-1',
+        }),
       );
 
       await routingService.handleMarketPriceUpdate('TOKEN-A', 100);
@@ -703,7 +712,11 @@ describe('TradingEngineService', () => {
         new Date(),
       );
       const snapshot = routingService.createTrade(
-        tradeParams({ mode: 'LIVE', instrumentToken: 'TOKEN-CANCEL' }),
+        tradeParams({
+          mode: 'LIVE',
+          instrumentToken: 'TOKEN-CANCEL',
+          brokerAccountId: 'acc-1',
+        }),
       );
       await routingService.handleMarketPriceUpdate('TOKEN-CANCEL', 100);
       expect(routingService.getTrade(snapshot.id).state).toBe(

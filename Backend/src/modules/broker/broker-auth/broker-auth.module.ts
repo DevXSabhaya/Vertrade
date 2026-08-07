@@ -49,10 +49,6 @@ import {
     BrokerSessionManager,
     DhanAccountService,
     BrokerTokenRenewalScheduler,
-    // MarketDataCredentialProvider (in MarketDataModule) reads the latest
-    // persisted broker token directly, deliberately without depending on
-    // BrokerSessionManager's session lifecycle — see its own docstring.
-    BROKER_TOKEN_REPOSITORY,
     // BrokerRegistryModule builds the Dhan BrokerDefinition entry from the
     // same IBrokerAuth implementation BrokerSessionManager uses — one real
     // adapter, two independent consumers.

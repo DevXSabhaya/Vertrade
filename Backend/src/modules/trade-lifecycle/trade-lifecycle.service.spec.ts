@@ -118,6 +118,7 @@ describe('TradeLifecycleService', () => {
       initialStopLoss: 95,
       targets: [110],
       mode: 'PAPER',
+      brokerAccountId: null,
     });
 
     eventBus.publish(new TradeCancelledEvent(snapshot.id, 'user requested'));
@@ -148,6 +149,7 @@ describe('TradeLifecycleService', () => {
       initialStopLoss: 95,
       targets: [110],
       mode: 'PAPER',
+      brokerAccountId: null,
     });
     await tradingEngineService.handleMarketPriceUpdate(
       snapshot.instrumentToken,

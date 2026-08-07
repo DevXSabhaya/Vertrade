@@ -27,6 +27,7 @@ export interface TradeSnapshot {
   readonly currentStopLoss: number;
   readonly targets: readonly number[];
   readonly mode: TradingMode;
+  readonly brokerAccountId: string | null;
   readonly remainingTargets: readonly number[];
   readonly entryOrderId: string | null;
   readonly entryOrderLifecycle: OrderLifecycleStatus | null;

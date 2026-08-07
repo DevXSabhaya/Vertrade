@@ -55,6 +55,7 @@ export class Trade {
   private readonly _initialStopLoss: number;
   private readonly _targets: readonly number[];
   private readonly _mode: TradingMode;
+  private readonly _brokerAccountId: string | null;
   private readonly _metadata: Readonly<Record<string, unknown>>;
   private readonly _createdAt: string;
   private readonly _history: TradeHistoryEntry[] = [];
@@ -93,6 +94,7 @@ export class Trade {
     this._remainingTargets = [...params.targets];
     this._currentStopLoss = params.initialStopLoss;
     this._mode = params.mode;
+    this._brokerAccountId = params.brokerAccountId;
     this._metadata = { ...(params.metadata ?? {}) };
     this._createdAt = now.toISOString();
     this._updatedAt = now.toISOString();
@@ -139,6 +141,7 @@ export class Trade {
       targets: snapshot.targets,
       metadata: snapshot.metadata,
       mode: snapshot.mode,
+      brokerAccountId: snapshot.brokerAccountId,
     };
     const trade = new Trade(snapshot.id, params, new Date(snapshot.createdAt));
 
@@ -215,6 +218,11 @@ export class Trade {
   /** Captured once at creation — see `CreateTradeParams.mode`'s own docstring. Never changes for the lifetime of this trade, even if the deployment's current mode changes later. */
   get mode(): TradingMode {
     return this._mode;
+  }
+
+  /** The specific broker account this trade executes through — see `CreateTradeParams.brokerAccountId`'s own docstring. Always `null` for PAPER; never changes for the lifetime of a LIVE trade. */
+  get brokerAccountId(): string | null {
+    return this._brokerAccountId;
   }
 
   get remainingTargets(): readonly number[] {
@@ -298,6 +306,7 @@ export class Trade {
       currentStopLoss: this._currentStopLoss,
       targets: [...this._targets],
       mode: this._mode,
+      brokerAccountId: this._brokerAccountId,
       remainingTargets: [...this._remainingTargets],
       entryOrderId: this._entryOrderId,
       entryOrderLifecycle: this._entryOrderLifecycle,

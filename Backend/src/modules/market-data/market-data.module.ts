@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@core/config/config.service';
-import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
 import { CLOCK } from '@shared/clock/clock.constants';
 import { SystemClock } from '@shared/clock/system-clock';
 import { TIMER_SCHEDULER } from '@shared/scheduler/timer-scheduler.constants';
@@ -30,14 +29,14 @@ import type { IMarketDataProvider } from './interfaces/market-data-provider.inte
  * at module-wiring time, from `ConfigService.marketDataProvider` — never
  * from TradingModeService or any other trading-mode-aware signal, so Paper
  * and Live always observe the exact same feed (Core Architecture Principle
- * #1/#2/#5). `BrokerAuthModule` is imported only for the token-repository
- * binding `MarketDataCredentialProvider` reads opportunistically — this
- * module never imports/injects `BrokerSessionManager` itself, so market data
- * has no dependency on the broker's login/session lifecycle (Principle #3):
- * it connects and streams whether or not a broker has ever been added.
+ * #1/#2/#5). This module has no dependency on any broker session or
+ * per-user broker account (Principle #3): `MarketDataCredentialProvider`
+ * uses only its own static env-configured credentials, so market data
+ * connects and streams whether or not any user has ever connected a
+ * broker.
  */
 @Module({
-  imports: [BrokerAuthModule],
+  imports: [],
   providers: [
     MarketDataCredentialProvider,
     SubscriptionManager,

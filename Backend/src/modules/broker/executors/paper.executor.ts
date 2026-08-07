@@ -97,8 +97,14 @@ export class PaperExecutor implements IOrderExecutor {
     this.queuedFill = instruction;
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- see class docstring: async is deliberate here to turn throws into rejections
-  async placeEntryOrder(request: OrderRequest): Promise<OrderResponse> {
+  async placeEntryOrder(
+    request: OrderRequest,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    // Paper trades have no broker account — accountId is part of
+    // IOrderExecutor's contract but always null/unused here.
+    void accountId;
+    await Promise.resolve();
     this.assertValidRequest(request);
 
     const instruction = this.consumeQueuedFill();
@@ -190,11 +196,13 @@ export class PaperExecutor implements IOrderExecutor {
     return this.toResponse(record);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- see class docstring
   async modifyOrder(
     brokerOrderId: string,
     changes: OrderModification,
+    accountId: string | null,
   ): Promise<OrderResponse> {
+    void accountId;
+    await Promise.resolve();
     const record = this.requireOrder(brokerOrderId);
 
     if (TERMINAL_STATUSES.has(record.status)) {
@@ -219,8 +227,12 @@ export class PaperExecutor implements IOrderExecutor {
     return this.toResponse(record);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- see class docstring
-  async cancelOrder(brokerOrderId: string): Promise<OrderResponse> {
+  async cancelOrder(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    void accountId;
+    await Promise.resolve();
     const record = this.requireOrder(brokerOrderId);
 
     if (TERMINAL_STATUSES.has(record.status)) {
@@ -234,11 +246,13 @@ export class PaperExecutor implements IOrderExecutor {
     return this.toResponse(record);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- see class docstring
   async exitPosition(
     brokerOrderId: string,
     request: ExitRequest,
+    accountId: string | null,
   ): Promise<OrderResponse> {
+    void accountId;
+    await Promise.resolve();
     const original = this.requireOrder(brokerOrderId);
 
     if (
@@ -287,8 +301,12 @@ export class PaperExecutor implements IOrderExecutor {
     return this.toResponse(exitRecord);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- see class docstring
-  async getOrderStatus(brokerOrderId: string): Promise<OrderResponse> {
+  async getOrderStatus(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    void accountId;
+    await Promise.resolve();
     const record = this.requireOrder(brokerOrderId);
     return this.toResponse(record);
   }

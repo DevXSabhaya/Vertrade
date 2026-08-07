@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import type { IOrderExecutor } from './order-executor.interface';
 import type { OrderRequest } from './models/order-request.model';
 import type { OrderModification } from './models/order-modification.model';
@@ -10,55 +9,71 @@ import { DhanExecutor } from './dhan/dhan.executor';
 
 /**
  * The `ORDER_EXECUTOR` DI token's concrete implementation — resolves to
- * whichever executor matches the deployment's *current* trading mode on
- * every call, via `TradingModeService` (persisted, switchable at runtime).
+ * `DhanExecutor` when the caller supplies a real `accountId`, or
+ * `PaperExecutor` when it doesn't (`null`). This is the same signal
+ * `TradingEngineService.executorFor` already keys on (a trade's own pinned
+ * `brokerAccountId`, never a "deployment's current mode" — trading mode is
+ * per-user now, so there is no single global mode to route by anyway).
  *
  * Deliberately NOT used by `TradingEngineService`, whose trades pin their
- * own `mode` once at creation time and must keep using that same executor
- * for their entire lifecycle even if the deployment's current mode changes
- * later (see `TradingEngineService.executorFor`) — using "current mode" per
- * call there would let an in-flight trade's entry and exit legs silently
- * cross between Paper and a real broker. This class exists for the other,
- * genuinely current-mode-scoped consumers (e.g. `BrokerPositionProvider`,
- * reconciliation against whatever broker is live *right now*).
+ * own executor once at creation time and must keep using it for their
+ * entire lifecycle. This class exists for the other, genuinely
+ * per-call-scoped consumers (e.g. `BrokerPositionProvider`, reconciliation
+ * against whichever broker account a specific local position belongs to).
  */
 @Injectable()
 export class RoutingOrderExecutor implements IOrderExecutor {
   constructor(
-    private readonly tradingModeService: TradingModeService,
     private readonly paperExecutor: PaperExecutor,
     private readonly dhanExecutor: DhanExecutor,
   ) {}
 
-  placeEntryOrder(request: OrderRequest): Promise<OrderResponse> {
-    return this.current().placeEntryOrder(request);
+  placeEntryOrder(
+    request: OrderRequest,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    return this.current(accountId).placeEntryOrder(request, accountId);
   }
 
   modifyOrder(
     brokerOrderId: string,
     changes: OrderModification,
+    accountId: string | null,
   ): Promise<OrderResponse> {
-    return this.current().modifyOrder(brokerOrderId, changes);
+    return this.current(accountId).modifyOrder(
+      brokerOrderId,
+      changes,
+      accountId,
+    );
   }
 
-  cancelOrder(brokerOrderId: string): Promise<OrderResponse> {
-    return this.current().cancelOrder(brokerOrderId);
+  cancelOrder(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    return this.current(accountId).cancelOrder(brokerOrderId, accountId);
   }
 
   exitPosition(
     brokerOrderId: string,
     request: ExitRequest,
+    accountId: string | null,
   ): Promise<OrderResponse> {
-    return this.current().exitPosition(brokerOrderId, request);
+    return this.current(accountId).exitPosition(
+      brokerOrderId,
+      request,
+      accountId,
+    );
   }
 
-  getOrderStatus(brokerOrderId: string): Promise<OrderResponse> {
-    return this.current().getOrderStatus(brokerOrderId);
+  getOrderStatus(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    return this.current(accountId).getOrderStatus(brokerOrderId, accountId);
   }
 
-  private current(): IOrderExecutor {
-    return this.tradingModeService.getCurrentMode() === 'LIVE'
-      ? this.dhanExecutor
-      : this.paperExecutor;
+  private current(accountId: string | null): IOrderExecutor {
+    return accountId ? this.dhanExecutor : this.paperExecutor;
   }
 }

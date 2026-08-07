@@ -76,6 +76,7 @@ describe('TargetManager', () => {
       initialStopLoss: 95,
       targets: [110, 120, 135],
       mode: 'PAPER',
+      brokerAccountId: null,
     });
   }
 

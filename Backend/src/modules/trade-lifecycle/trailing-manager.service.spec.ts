@@ -80,6 +80,7 @@ describe('TrailingManager', () => {
       initialStopLoss: 95,
       targets: [500], // far away, so the engine's own default trailing never interferes with these tests
       mode: 'PAPER',
+      brokerAccountId: null,
       ...overrides,
     });
     await tradingEngineService.handleMarketPriceUpdate(

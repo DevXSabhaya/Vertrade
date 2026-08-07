@@ -34,6 +34,7 @@ export class LocalPositionProvider {
         tradeState: trade.state,
         entryOrderId: trade.entryOrderId,
         exitOrderId: trade.exitOrderId,
+        brokerAccountId: trade.brokerAccountId,
       }));
   }
 }

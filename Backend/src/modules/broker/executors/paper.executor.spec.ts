@@ -35,10 +35,11 @@ describeOrderExecutorContract('PaperExecutor', () => {
 
   return {
     executor,
-    placeFillableOrder: () => executor.placeEntryOrder(marketRequest()),
+    accountId: null,
+    placeFillableOrder: () => executor.placeEntryOrder(marketRequest(), null),
     placeOpenOrder: () => {
       executor.queueNextFill({ status: OrderStatus.OPEN });
-      return executor.placeEntryOrder(marketRequest());
+      return executor.placeEntryOrder(marketRequest(), null);
     },
   };
 });
@@ -54,8 +55,8 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
 
   it('produces sequential, non-random broker order ids', async () => {
     executor.setMarketPrice('TOKEN1', 100);
-    const first = await executor.placeEntryOrder(marketRequest());
-    const second = await executor.placeEntryOrder(marketRequest());
+    const first = await executor.placeEntryOrder(marketRequest(), null);
+    const second = await executor.placeEntryOrder(marketRequest(), null);
 
     expect(first.brokerOrderId).toBe('PAPER-000001');
     expect(second.brokerOrderId).toBe('PAPER-000002');
@@ -63,15 +64,15 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
 
   it('fills a MARKET order at the exact price set via setMarketPrice — never guessing', async () => {
     executor.setMarketPrice('TOKEN1', 123.45);
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
     expect(response.averagePrice).toBe(123.45);
     expect(response.status).toBe(OrderStatus.FILLED);
   });
 
   it('throws OrderPlacementException for a MARKET order with no price ever set', async () => {
-    await expect(executor.placeEntryOrder(marketRequest())).rejects.toThrow(
-      OrderPlacementException,
-    );
+    await expect(
+      executor.placeEntryOrder(marketRequest(), null),
+    ).rejects.toThrow(OrderPlacementException);
   });
 
   it('fills a MARKET order from a live MarketPriceUpdatedEvent alone — the real production wiring, not a manual setMarketPrice() call', async () => {
@@ -83,7 +84,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     // "No market price available" because nothing wired live ticks in.
     eventBus.publish(new MarketPriceUpdatedEvent('TOKEN1', 250.5));
 
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
 
     expect(response.status).toBe(OrderStatus.FILLED);
     expect(response.averagePrice).toBe(250.5);
@@ -94,7 +95,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     eventBus.publish(new MarketPriceUpdatedEvent('TOKEN1', 105));
     eventBus.publish(new MarketPriceUpdatedEvent('TOKEN1', 110));
 
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
 
     expect(response.averagePrice).toBe(110);
   });
@@ -109,7 +110,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
       OrderPriceType.LIMIT,
       200,
     );
-    const response = await executor.placeEntryOrder(request);
+    const response = await executor.placeEntryOrder(request, null);
     expect(response.averagePrice).toBe(200);
   });
 
@@ -122,7 +123,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
       50,
       OrderPriceType.LIMIT,
     );
-    await expect(executor.placeEntryOrder(request)).rejects.toThrow(
+    await expect(executor.placeEntryOrder(request, null)).rejects.toThrow(
       OrderPlacementException,
     );
   });
@@ -130,7 +131,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
   it('rejects an order with non-positive quantity', async () => {
     executor.setMarketPrice('TOKEN1', 100);
     await expect(
-      executor.placeEntryOrder(marketRequest({ quantity: 0 })),
+      executor.placeEntryOrder(marketRequest({ quantity: 0 }), null),
     ).rejects.toThrow(OrderPlacementException);
   });
 
@@ -141,7 +142,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
       message: 'insufficient margin',
     });
 
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
 
     expect(response.status).toBe(OrderStatus.REJECTED);
     expect(response.message).toBe('insufficient margin');
@@ -157,6 +158,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
 
     const response = await executor.placeEntryOrder(
       marketRequest({ quantity: 50 }),
+      null,
     );
 
     expect(response.status).toBe(OrderStatus.PARTIALLY_FILLED);
@@ -167,8 +169,8 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     executor.setMarketPrice('TOKEN1', 100);
     executor.queueNextFill({ status: OrderStatus.REJECTED });
 
-    const first = await executor.placeEntryOrder(marketRequest());
-    const second = await executor.placeEntryOrder(marketRequest());
+    const first = await executor.placeEntryOrder(marketRequest(), null);
+    const second = await executor.placeEntryOrder(marketRequest(), null);
 
     expect(first.status).toBe(OrderStatus.REJECTED);
     expect(second.status).toBe(OrderStatus.FILLED);
@@ -178,50 +180,64 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     executor.queueNextFill({ status: OrderStatus.OPEN });
     const placed = await executor.placeEntryOrder(
       marketRequest({ quantity: 10 }),
+      null,
     );
 
-    await executor.modifyOrder(placed.brokerOrderId, new OrderModification(30));
-    const fetched = await executor.getOrderStatus(placed.brokerOrderId);
+    await executor.modifyOrder(
+      placed.brokerOrderId,
+      new OrderModification(30),
+      null,
+    );
+    const fetched = await executor.getOrderStatus(placed.brokerOrderId, null);
 
     expect(fetched.brokerOrderId).toBe(placed.brokerOrderId);
   });
 
   it('rejects modifying an order that is already FILLED', async () => {
     executor.setMarketPrice('TOKEN1', 100);
-    const placed = await executor.placeEntryOrder(marketRequest());
+    const placed = await executor.placeEntryOrder(marketRequest(), null);
 
     await expect(
-      executor.modifyOrder(placed.brokerOrderId, new OrderModification(99)),
+      executor.modifyOrder(
+        placed.brokerOrderId,
+        new OrderModification(99),
+        null,
+      ),
     ).rejects.toThrow(OrderModificationException);
   });
 
   it('rejects modifying to a non-positive quantity', async () => {
     executor.queueNextFill({ status: OrderStatus.OPEN });
-    const placed = await executor.placeEntryOrder(marketRequest());
+    const placed = await executor.placeEntryOrder(marketRequest(), null);
 
     await expect(
-      executor.modifyOrder(placed.brokerOrderId, new OrderModification(0)),
+      executor.modifyOrder(
+        placed.brokerOrderId,
+        new OrderModification(0),
+        null,
+      ),
     ).rejects.toThrow(OrderModificationException);
   });
 
   it('rejects cancelling an order that is already CANCELLED', async () => {
     executor.queueNextFill({ status: OrderStatus.OPEN });
-    const placed = await executor.placeEntryOrder(marketRequest());
-    await executor.cancelOrder(placed.brokerOrderId);
+    const placed = await executor.placeEntryOrder(marketRequest(), null);
+    await executor.cancelOrder(placed.brokerOrderId, null);
 
-    await expect(executor.cancelOrder(placed.brokerOrderId)).rejects.toThrow(
-      OrderCancellationException,
-    );
+    await expect(
+      executor.cancelOrder(placed.brokerOrderId, null),
+    ).rejects.toThrow(OrderCancellationException);
   });
 
   it('exits only up to the filled quantity, never more', async () => {
     executor.setMarketPrice('TOKEN1', 100);
     const placed = await executor.placeEntryOrder(
       marketRequest({ quantity: 10 }),
+      null,
     );
 
     await expect(
-      executor.exitPosition(placed.brokerOrderId, new ExitRequest(11)),
+      executor.exitPosition(placed.brokerOrderId, new ExitRequest(11), null),
     ).rejects.toThrow(OrderPlacementException);
   });
 
@@ -229,11 +245,13 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     executor.setMarketPrice('TOKEN1', 100);
     const placed = await executor.placeEntryOrder(
       marketRequest({ quantity: 10 }),
+      null,
     );
 
     const exited = await executor.exitPosition(
       placed.brokerOrderId,
       new ExitRequest(10, 150),
+      null,
     );
 
     expect(exited.averagePrice).toBe(150);
@@ -241,10 +259,11 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
 
   it('flips the side on the exit order relative to the entry order', async () => {
     executor.setMarketPrice('TOKEN1', 100);
-    const placed = await executor.placeEntryOrder(marketRequest());
+    const placed = await executor.placeEntryOrder(marketRequest(), null);
     const exited = await executor.exitPosition(
       placed.brokerOrderId,
       new ExitRequest(50),
+      null,
     );
 
     // Re-fetch via getOrderStatus is not enough to see `side` (not on OrderResponse),
@@ -254,7 +273,7 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
   });
 
   it('throws OrderNotFoundException (not a generic error) for an unknown order id', async () => {
-    await expect(executor.getOrderStatus('NOPE')).rejects.toThrow(
+    await expect(executor.getOrderStatus('NOPE', null)).rejects.toThrow(
       OrderNotFoundException,
     );
   });
@@ -316,6 +335,7 @@ describe('PaperExecutor SL / SL_M order types', () => {
           OrderPriceType.SL,
           95,
         ),
+        null,
       ),
     ).rejects.toThrow(OrderPlacementException);
   });
@@ -331,18 +351,22 @@ describe('PaperExecutor SL / SL_M order types', () => {
           50,
           OrderPriceType.SL_M,
         ),
+        null,
       ),
     ).rejects.toThrow(OrderPlacementException);
   });
 
   it('fills an SL order at its specified price, exactly like LIMIT', async () => {
-    const response = await executor.placeEntryOrder(slOrder({ price: 94 }));
+    const response = await executor.placeEntryOrder(
+      slOrder({ price: 94 }),
+      null,
+    );
     expect(response.averagePrice).toBe(94);
     expect(response.status).toBe(OrderStatus.FILLED);
   });
 
   it('fills an SL_M order at the current market price, exactly like MARKET', async () => {
-    const response = await executor.placeEntryOrder(slMarketOrder());
+    const response = await executor.placeEntryOrder(slMarketOrder(), null);
     expect(response.averagePrice).toBe(100);
     expect(response.status).toBe(OrderStatus.FILLED);
   });
@@ -354,7 +378,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
       new EventEmitterEventBus(new EventEmitter2()),
     );
     executor.setMarketPrice('TOKEN1', 100);
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
     expect(response.averagePrice).toBe(100);
     expect(response.status).toBe(OrderStatus.FILLED);
     expect(response.filledQuantity).toBe(50);
@@ -371,7 +395,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
       },
     );
     executor.setMarketPrice('TOKEN1', 100);
-    const response = await executor.placeEntryOrder(marketRequest());
+    const response = await executor.placeEntryOrder(marketRequest(), null);
     // 100 bps = 1% of 100 = 1 → BUY fills at 101, never at the raw tick price.
     expect(response.averagePrice).toBe(101);
   });
@@ -387,7 +411,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
       },
     );
     executor.setMarketPrice('TOKEN1', 100);
-    const response = await executor.placeEntryOrder(slMarketOrder());
+    const response = await executor.placeEntryOrder(slMarketOrder(), null);
     expect(response.averagePrice).toBe(99);
   });
 
@@ -402,7 +426,10 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
       },
     );
     executor.setMarketPrice('TOKEN1', 100);
-    const response = await executor.placeEntryOrder(slOrder({ price: 94 }));
+    const response = await executor.placeEntryOrder(
+      slOrder({ price: 94 }),
+      null,
+    );
     expect(response.averagePrice).toBe(94);
   });
 
@@ -419,6 +446,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
     executor.setMarketPrice('TOKEN1', 100);
     const response = await executor.placeEntryOrder(
       marketRequest({ quantity: 50 }),
+      null,
     );
     expect(response.status).toBe(OrderStatus.PARTIALLY_FILLED);
     expect(response.filledQuantity).toBe(20);
@@ -437,6 +465,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
     executor.setMarketPrice('TOKEN1', 100);
     const response = await executor.placeEntryOrder(
       marketRequest({ quantity: 50 }),
+      null,
     );
     expect(response.status).toBe(OrderStatus.REJECTED);
     expect(response.filledQuantity).toBe(0);
@@ -463,6 +492,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
         OrderPriceType.LIMIT,
         110, // 10% away from the market price of 100 — outside a 2% band.
       ),
+      null,
     );
     expect(response.status).toBe(OrderStatus.REJECTED);
   });
@@ -488,6 +518,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
         OrderPriceType.LIMIT,
         101,
       ),
+      null,
     );
     expect(response.status).toBe(OrderStatus.FILLED);
   });
@@ -511,6 +542,7 @@ describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
 
     const response = await executor.placeEntryOrder(
       marketRequest({ quantity: 50 }),
+      null,
     );
     expect(response.status).toBe(OrderStatus.FILLED);
     expect(response.filledQuantity).toBe(50);

@@ -31,7 +31,7 @@ describe('RecoverySnapshotService', () => {
   let tradingEngineService: TradingEngineService;
   let orderQueueService: jest.Mocked<Pick<OrderQueueService, 'getAllItems'>>;
   let brokerSessionManager: jest.Mocked<
-    Pick<BrokerSessionManager, 'getActiveSession'>
+    Pick<BrokerSessionManager, 'getActiveSession' | 'getAllActiveAccountIds'>
   >;
   let service: RecoverySnapshotService;
 
@@ -76,6 +76,7 @@ describe('RecoverySnapshotService', () => {
     orderQueueService = { getAllItems: jest.fn().mockReturnValue([]) };
     brokerSessionManager = {
       getActiveSession: jest.fn().mockReturnValue(null),
+      getAllActiveAccountIds: jest.fn().mockReturnValue([]),
     };
 
     service = new RecoverySnapshotService(
@@ -104,6 +105,7 @@ describe('RecoverySnapshotService', () => {
         initialStopLoss: 95,
         targets: [110],
         mode: 'PAPER',
+        brokerAccountId: null,
       });
       orderQueueService.getAllItems.mockReturnValue([
         { idempotencyKey: 'key-1' } as never,
@@ -124,13 +126,16 @@ describe('RecoverySnapshotService', () => {
     });
 
     it('includes the broker session client code when a session is active', () => {
+      brokerSessionManager.getAllActiveAccountIds.mockReturnValue(['acc-1']);
       brokerSessionManager.getActiveSession.mockReturnValue({
         clientCode: 'ABC123',
       } as never);
 
       const snapshot = service.captureSnapshot();
 
-      expect(snapshot.brokerSessionClientCode).toBe('ABC123');
+      expect(snapshot.activeBrokerSessions).toEqual([
+        { accountId: 'acc-1', clientCode: 'ABC123' },
+      ]);
     });
 
     it('tracks the last observed tick via MarketPriceUpdatedEvent', () => {

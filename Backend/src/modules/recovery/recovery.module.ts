@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { FeatureFlagsModule } from '@core/feature-flags/feature-flags.module';
 import { SettingsModule } from '@modules/settings/settings.module';
 import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
+import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
 import { InstrumentMasterModule } from '@modules/instrument-master/instrument-master.module';
 import { TradingEngineModule } from '@modules/trading-engine/trading-engine.module';
@@ -61,6 +62,7 @@ import { RecoveryErrorRepository } from './repository/recovery-error.repository'
     FeatureFlagsModule,
     SettingsModule,
     BrokerAuthModule,
+    TradingModeModule,
     MarketDataModule,
     InstrumentMasterModule,
     TradingEngineModule,

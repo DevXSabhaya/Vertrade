@@ -19,9 +19,19 @@ export interface CreateTradeParams {
   readonly metadata?: Readonly<Record<string, unknown>>;
   /**
    * Captured once by the caller (`QueueWorker`, from `TradingModeService`'s
-   * *current* mode) at the exact moment this trade is created — never
-   * re-evaluated afterward. This is what pins the trade to one executor for
-   * its entire lifecycle; see `TradingEngineService.executorFor`.
+   * *current* mode for the trade's owning user) at the exact moment this
+   * trade is created — never re-evaluated afterward. This is what pins the
+   * trade to one executor for its entire lifecycle; see
+   * `TradingEngineService.executorFor`.
    */
   readonly mode: TradingMode;
+  /**
+   * The specific `BrokerAccount.accountId` this trade executes through —
+   * `null` for PAPER (no broker account involved at all), always a real,
+   * owned account id for LIVE. Captured once alongside `mode`, from the
+   * same per-user `TradingModeService` preference, and never re-evaluated —
+   * an in-flight trade keeps using the same account for its whole lifecycle
+   * even if the owning user later switches their selected broker.
+   */
+  readonly brokerAccountId: string | null;
 }

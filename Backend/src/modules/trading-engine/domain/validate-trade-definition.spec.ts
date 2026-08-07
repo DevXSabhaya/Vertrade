@@ -15,6 +15,7 @@ function longParams(
     initialStopLoss: 95,
     targets: [110, 120, 135, 150],
     mode: 'PAPER',
+    brokerAccountId: null,
     ...overrides,
   };
 }

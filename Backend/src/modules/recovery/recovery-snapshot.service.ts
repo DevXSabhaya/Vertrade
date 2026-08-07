@@ -109,8 +109,14 @@ export class RecoverySnapshotService implements OnModuleInit, OnModuleDestroy {
       idempotencyKeys: queueItems.map((item) => item.idempotencyKey),
       marketSubscriptions: Array.from(subscriptionsByToken.values()),
       engineStateSummary,
-      brokerSessionClientCode:
-        this.brokerSessionManager.getActiveSession()?.clientCode ?? null,
+      activeBrokerSessions: this.brokerSessionManager
+        .getAllActiveAccountIds()
+        .map((accountId) => ({
+          accountId,
+          clientCode:
+            this.brokerSessionManager.getActiveSession(accountId)?.clientCode ??
+            '',
+        })),
       lastTick: this.lastTick,
     };
   }

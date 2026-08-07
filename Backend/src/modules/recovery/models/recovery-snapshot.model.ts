@@ -14,6 +14,12 @@ export interface RecoveryLastTick {
   readonly at: string;
 }
 
+/** One independent broker session at capture time — many can coexist, one per active `BrokerAccount`. */
+export interface RecoveryActiveBrokerSession {
+  readonly accountId: string;
+  readonly clientCode: string;
+}
+
 /**
  * The composite point-in-time record Recovery persists and rehydrates from
  * (Part 4 of the Phase 9 spec). Every field is a plain, already-serializable
@@ -29,6 +35,7 @@ export interface RecoverySnapshot {
   readonly marketSubscriptions: readonly RecoveryMarketSubscription[];
   /** Trade-count-by-state summary — a cheap way to sanity-check recovery without walking every trade. */
   readonly engineStateSummary: Readonly<Record<string, number>>;
-  readonly brokerSessionClientCode: string | null;
+  /** Every broker account that held a session at capture time — restored independently per account, never assuming a single global session. */
+  readonly activeBrokerSessions: readonly RecoveryActiveBrokerSession[];
   readonly lastTick: RecoveryLastTick | null;
 }

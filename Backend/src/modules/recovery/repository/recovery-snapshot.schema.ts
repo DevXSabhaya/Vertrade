@@ -25,8 +25,8 @@ export class RecoverySnapshotDocumentSchema {
   marketSubscriptions!: unknown;
   @Prop({ required: true, type: Object, default: {} })
   engineStateSummary!: Record<string, number>;
-  @Prop({ type: String, default: null }) brokerSessionClientCode!:
-    string | null;
+  @Prop({ type: MongooseSchema.Types.Mixed, default: [] })
+  activeBrokerSessions!: unknown;
   @Prop({ type: Object, default: null }) lastTick!: Record<
     string,
     unknown

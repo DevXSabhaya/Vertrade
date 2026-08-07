@@ -18,4 +18,5 @@ export interface LocalPositionView {
   readonly tradeState: TradeState;
   readonly entryOrderId: string | null;
   readonly exitOrderId: string | null;
+  readonly brokerAccountId: string | null;
 }

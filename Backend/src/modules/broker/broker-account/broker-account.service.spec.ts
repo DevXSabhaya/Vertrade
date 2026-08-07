@@ -56,7 +56,7 @@ describe('BrokerAccountService', () => {
       findAllByUser: jest.fn(),
       findById: jest.fn(),
       getCredentials: jest.fn(),
-      deactivateAllForUser: jest.fn().mockResolvedValue(undefined),
+      getCredentialsByAccountId: jest.fn(),
       markActive: jest.fn(),
       recordConnectionOutcome: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
@@ -120,7 +120,7 @@ describe('BrokerAccountService', () => {
   });
 
   describe('activate', () => {
-    it('reconnects using the stored credentials, deactivates other accounts, and marks this one active', async () => {
+    it('reconnects using the stored credentials and marks this one active', async () => {
       const target = account({ accountId: 'acc-1' });
       repository.findById.mockResolvedValue(target);
       repository.getCredentials.mockResolvedValue({
@@ -132,10 +132,10 @@ describe('BrokerAccountService', () => {
       const result = await service.activate('user-1', 'acc-1');
 
       expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith(
+        'acc-1',
         'T1',
         'C1',
       );
-      expect(repository.deactivateAllForUser).toHaveBeenCalledWith('user-1');
       expect(repository.markActive).toHaveBeenCalledWith('user-1', 'acc-1');
       expect(result.isActive).toBe(true);
       expect(eventBus.publish).toHaveBeenCalled();
@@ -170,7 +170,6 @@ describe('BrokerAccountService', () => {
         'acc-1',
         'invalid token',
       );
-      expect(repository.deactivateAllForUser).not.toHaveBeenCalled();
     });
   });
 
@@ -196,6 +195,7 @@ describe('BrokerAccountService', () => {
       await service.reconnect('user-1', 'acc-1');
 
       expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith(
+        'acc-1',
         'T1',
         'C1',
       );

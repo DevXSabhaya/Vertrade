@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { FeatureFlagsService } from '@core/feature-flags/feature-flag.service';
-import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
+import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import type { HealthSnapshot } from '@modules/broker-health/models/health-snapshot.model';
 import type { HealthSnapshotUpdatedEvent } from '@modules/broker-health/events/health-snapshot-updated.event';
@@ -42,7 +42,7 @@ export class LiveOrderSafetyGateService {
   private latestSnapshot: HealthSnapshot | null = null;
 
   constructor(
-    private readonly tradingModeService: TradingModeService,
+    private readonly sessionManager: BrokerSessionManager,
     private readonly featureFlagsService: FeatureFlagsService,
     @Inject(EVENT_BUS) eventBus: IEventBus,
   ) {
@@ -62,20 +62,26 @@ export class LiveOrderSafetyGateService {
    * missing confirmation flag or a stale health snapshot; that would turn
    * a safety mechanism into a hazard.
    *
-   * `DhanExecutor.placeEntryOrder` is only ever reached for a trade
-   * whose own `mode` was already pinned to LIVE at creation time (see
+   * `DhanExecutor.placeEntryOrder` is only ever reached for a trade whose
+   * own `mode` was already pinned to LIVE at creation time (see
    * `TradingEngineService.executorFor`) — so the check below is not "is
-   * this deployment LIVE by default," it's "is this deployment *still*
-   * LIVE right now." An operator switching the deployment's current mode
-   * away from LIVE (`TradingModeService.setMode('PAPER', ...)`) therefore
-   * acts as an immediate brake on any further live entries from
-   * already-armed LIVE trades too — this must block, never silently pass
-   * a live order through as if the check didn't apply.
+   * this account LIVE by default," it's "does this specific account *still*
+   * have a valid, connected broker session right now." Trading mode is
+   * per-user now, so there is no single deployment-wide mode to re-check
+   * here; the account's own session validity is the precise per-trade
+   * analogue — a user disconnecting/switching away from this account
+   * (`TradingModeService.setMode`/`setSelectedBroker`) tears down its
+   * session (`BrokerSessionManager.unloadSession`/`logout`), which this
+   * check picks up immediately, blocking any further live entries from
+   * already-armed trades pinned to that account.
    */
-  async checkEntryAllowed(confirmed: boolean): Promise<LiveOrderGateResult> {
-    if (this.tradingModeService.getCurrentMode() !== 'LIVE') {
+  async checkEntryAllowed(
+    confirmed: boolean,
+    accountId: string,
+  ): Promise<LiveOrderGateResult> {
+    if (!this.sessionManager.isSessionValid(accountId)) {
       return this.blocked(
-        'This deployment is not currently in LIVE mode — a previously-armed live trade cannot place new entry orders until LIVE mode is re-enabled',
+        'This broker account no longer has a valid session — a previously-armed live trade cannot place new entry orders until the account is reconnected',
       );
     }
 

@@ -45,6 +45,7 @@ function result(
       tradeState: TradeState.ACTIVE,
       entryOrderId: 'E-1',
       exitOrderId: null,
+      brokerAccountId: null,
     },
     broker: {
       tradeId: 't1',

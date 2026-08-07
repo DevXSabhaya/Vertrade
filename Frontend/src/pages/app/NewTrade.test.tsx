@@ -83,7 +83,7 @@ function sampleBankniftyOption(overrides: BankniftyOptionOverrides = {}) {
 describe('NewTrade page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'PAPER', defaultTradingMode: 'PAPER' })
+    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'PAPER', selectedBrokerAccountId: null })
   })
 
   it('shows validation errors and never submits an invalid form', async () => {
@@ -171,7 +171,7 @@ describe('NewTrade page', () => {
   })
 
   it('requires explicit live confirmation before submitting in LIVE mode, and sends liveTradingConfirmed once checked', async () => {
-    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'LIVE', defaultTradingMode: 'PAPER' })
+    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'LIVE', selectedBrokerAccountId: 'acc-1' })
     vi.mocked(instrumentService.expiries).mockResolvedValue([sampleResolvedEquity()])
     vi.mocked(tradingService.create).mockResolvedValue(samplePaperTradeView())
     const user = userEvent.setup()

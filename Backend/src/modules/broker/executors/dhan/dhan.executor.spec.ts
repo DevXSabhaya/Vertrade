@@ -1,9 +1,8 @@
 import { DhanExecutor } from './dhan.executor';
-import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import { BrokerSession } from '@modules/broker/broker-auth/entities/broker-session.entity';
 import { BrokerToken } from '@modules/broker/broker-auth/value-objects/broker-token.vo';
-import { BrokerCredentials } from '@modules/broker/broker-auth/value-objects/broker-credentials.vo';
+import type { IBrokerAccountRepository } from '@modules/broker/broker-account/repository/broker-account-repository.interface';
 import type { ConfigService } from '@core/config/config.service';
 import type {
   BrokerHttpRequest,
@@ -38,6 +37,7 @@ interface FakeOrderRecord {
 }
 
 const REST_BASE_URL = 'https://api.dhan.invalid/v2';
+const TEST_ACCOUNT_ID = 'acc-1';
 
 /** A minimal, fully in-memory fake Dhan order book — no real network ever involved. */
 class FakeDhanServer {
@@ -129,11 +129,20 @@ function createFakeSession(): BrokerSession {
   );
 }
 
-function createCredentialsProvider(): BrokerCredentialsProvider {
+function createBrokerAccountRepository(): jest.Mocked<IBrokerAccountRepository> {
   return {
-    getCredentials: () =>
-      new BrokerCredentials('CLIENT1', 'api-key', 'access-token-value'),
-  } as unknown as BrokerCredentialsProvider;
+    create: jest.fn(),
+    findAllByUser: jest.fn(),
+    findById: jest.fn(),
+    getCredentials: jest.fn(),
+    getCredentialsByAccountId: jest.fn().mockResolvedValue({
+      clientId: 'CLIENT1',
+      accessToken: 'access-token-value',
+    }),
+    markActive: jest.fn(),
+    recordConnectionOutcome: jest.fn(),
+    delete: jest.fn(),
+  };
 }
 
 function createConfigService(): ConfigService {
@@ -211,7 +220,7 @@ describeOrderExecutorContract('DhanExecutor', () => {
   } as unknown as BrokerSessionManager;
 
   const executor = new DhanExecutor(
-    createCredentialsProvider(),
+    createBrokerAccountRepository(),
     sessionManager,
     createAlwaysAllowGate(),
     createConfigService(),
@@ -220,10 +229,12 @@ describeOrderExecutorContract('DhanExecutor', () => {
 
   return {
     executor,
-    placeFillableOrder: () => executor.placeEntryOrder(entryRequest()),
+    accountId: TEST_ACCOUNT_ID,
+    placeFillableOrder: () =>
+      executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID),
     placeOpenOrder: () => {
       server.nextPlacementStatus = 'TRANSIT';
-      return executor.placeEntryOrder(entryRequest());
+      return executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID);
     },
   };
 });
@@ -244,7 +255,7 @@ describe('DhanExecutor (broker-specific behavior)', () => {
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     };
     executor = new DhanExecutor(
-      createCredentialsProvider(),
+      createBrokerAccountRepository(),
       sessionManager as unknown as BrokerSessionManager,
       createAlwaysAllowGate(),
       createConfigService(),
@@ -253,12 +264,12 @@ describe('DhanExecutor (broker-specific behavior)', () => {
   });
 
   it('never calls the real network — only the mocked http client is invoked', async () => {
-    await executor.placeEntryOrder(entryRequest());
+    await executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID);
     expect(httpClient.request).toHaveBeenCalled();
   });
 
   it('sends the required Dhan headers including the session access token', async () => {
-    await executor.placeEntryOrder(entryRequest());
+    await executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID);
 
     expect(httpClient.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -271,26 +282,33 @@ describe('DhanExecutor (broker-specific behavior)', () => {
 
   it('throws OrderPlacementException when Dhan rejects the order', async () => {
     server.rejectNextPlacement = true;
-    await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
-      OrderPlacementException,
-    );
+    await expect(
+      executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID),
+    ).rejects.toThrow(OrderPlacementException);
   });
 
   it('throws OrderNotFoundException for an unknown order id', async () => {
-    await expect(executor.getOrderStatus('UNKNOWN-ID')).rejects.toThrow(
-      OrderNotFoundException,
-    );
+    await expect(
+      executor.getOrderStatus('UNKNOWN-ID', TEST_ACCOUNT_ID),
+    ).rejects.toThrow(OrderNotFoundException);
   });
 
   it('throws OrderNotFoundException when modifying an unknown order id', async () => {
     await expect(
-      executor.modifyOrder('UNKNOWN-ID', new OrderModification(10)),
+      executor.modifyOrder(
+        'UNKNOWN-ID',
+        new OrderModification(10),
+        TEST_ACCOUNT_ID,
+      ),
     ).rejects.toThrow(OrderNotFoundException);
   });
 
   it('automatically refreshes the session once and retries after a session-expired response', async () => {
     server.sessionExpiredOnce = true;
-    const response = await executor.placeEntryOrder(entryRequest());
+    const response = await executor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
 
     expect(sessionManager.refresh).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(OrderStatus.FILLED);
@@ -298,9 +316,9 @@ describe('DhanExecutor (broker-specific behavior)', () => {
 
   it('retries a transient network-level failure and wraps it in BrokerOrderApiException only once retries are exhausted', async () => {
     httpClient.request.mockRejectedValue(new TypeError('fetch failed'));
-    await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
-      BrokerOrderApiException,
-    );
+    await expect(
+      executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID),
+    ).rejects.toThrow(BrokerOrderApiException);
     // 1 initial attempt + 2 retries = 3 total calls.
     expect(httpClient.request).toHaveBeenCalledTimes(3);
   }, 10_000);
@@ -310,16 +328,19 @@ describe('DhanExecutor (broker-specific behavior)', () => {
     timeoutError.name = 'TimeoutError';
     httpClient.request.mockRejectedValue(timeoutError);
 
-    await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
-      BrokerOrderApiException,
-    );
+    await expect(
+      executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID),
+    ).rejects.toThrow(BrokerOrderApiException);
     expect(httpClient.request).toHaveBeenCalledTimes(3);
   }, 10_000);
 
   it('recovers automatically from a single transient network failure — the retry itself succeeds', async () => {
     httpClient.request.mockRejectedValueOnce(new TypeError('fetch failed'));
 
-    const response = await executor.placeEntryOrder(entryRequest());
+    const response = await executor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
 
     expect(response.status).toBe(OrderStatus.FILLED);
     expect(httpClient.request.mock.calls.length).toBeGreaterThan(1);
@@ -339,25 +360,42 @@ describe('DhanExecutor (broker-specific behavior)', () => {
       return Promise.resolve(realRequest!(req));
     });
 
-    const response = await executor.placeEntryOrder(entryRequest());
+    const response = await executor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
 
     expect(response.status).toBe(OrderStatus.FILLED);
     expect(calls).toBeGreaterThan(1);
   });
 
   it('marks the original order as EXITED after exitPosition, overlaying the broker order book', async () => {
-    const placed = await executor.placeEntryOrder(entryRequest());
-    await executor.exitPosition(placed.brokerOrderId, new ExitRequest(50));
+    const placed = await executor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
+    await executor.exitPosition(
+      placed.brokerOrderId,
+      new ExitRequest(50),
+      TEST_ACCOUNT_ID,
+    );
 
-    const afterExit = await executor.getOrderStatus(placed.brokerOrderId);
+    const afterExit = await executor.getOrderStatus(
+      placed.brokerOrderId,
+      TEST_ACCOUNT_ID,
+    );
     expect(afterExit.status).toBe(OrderStatus.EXITED);
   });
 
   it('exit order uses the opposite side (SELL) of the original BUY entry', async () => {
-    const placed = await executor.placeEntryOrder(entryRequest());
+    const placed = await executor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
     const exited = await executor.exitPosition(
       placed.brokerOrderId,
       new ExitRequest(50),
+      TEST_ACCOUNT_ID,
     );
 
     expect(exited.brokerOrderId).not.toBe(placed.brokerOrderId);
@@ -382,16 +420,16 @@ describe('DhanExecutor + LiveOrderSafetyGateService wiring', () => {
       refresh: jest.fn().mockResolvedValue(createFakeSession()),
     } as unknown as BrokerSessionManager;
     const executor = new DhanExecutor(
-      createCredentialsProvider(),
+      createBrokerAccountRepository(),
       sessionManager,
       blockingGate('broker health is DEGRADED'),
       createConfigService(),
       httpClient,
     );
 
-    await expect(executor.placeEntryOrder(entryRequest())).rejects.toThrow(
-      /broker health is DEGRADED/,
-    );
+    await expect(
+      executor.placeEntryOrder(entryRequest(), TEST_ACCOUNT_ID),
+    ).rejects.toThrow(/broker health is DEGRADED/);
     expect(httpClient.request).not.toHaveBeenCalled();
   });
 
@@ -404,17 +442,20 @@ describe('DhanExecutor + LiveOrderSafetyGateService wiring', () => {
     } as unknown as BrokerSessionManager;
     // First, place an entry with an always-allow gate so there's something to exit.
     const setupExecutor = new DhanExecutor(
-      createCredentialsProvider(),
+      createBrokerAccountRepository(),
       sessionManager,
       createAlwaysAllowGate(),
       createConfigService(),
       httpClient,
     );
-    const placed = await setupExecutor.placeEntryOrder(entryRequest());
+    const placed = await setupExecutor.placeEntryOrder(
+      entryRequest(),
+      TEST_ACCOUNT_ID,
+    );
 
     // Now exit using an executor instance wired to a gate that blocks every entry.
     const blockingExecutor = new DhanExecutor(
-      createCredentialsProvider(),
+      createBrokerAccountRepository(),
       sessionManager,
       blockingGate('LIVE_TRADING_ENABLED is off'),
       createConfigService(),
@@ -424,6 +465,7 @@ describe('DhanExecutor + LiveOrderSafetyGateService wiring', () => {
     const exited = await blockingExecutor.exitPosition(
       placed.brokerOrderId,
       new ExitRequest(50),
+      TEST_ACCOUNT_ID,
     );
 
     expect(exited.status).toBe(OrderStatus.FILLED);

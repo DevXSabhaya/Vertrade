@@ -14,7 +14,10 @@ export interface IBrokerAccountRepository {
     userId: string,
     accountId: string,
   ): Promise<BrokerAccountCredentials>;
-  deactivateAllForUser(userId: string): Promise<void>;
+  /** Owner-agnostic lookup for consumers (order executors) that only ever receive an already-resolved `accountId` — never a raw, unverified `userId`+`accountId` pair from a client request. `accountId` alone is already globally unique. */
+  getCredentialsByAccountId(
+    accountId: string,
+  ): Promise<BrokerAccountCredentials>;
   markActive(userId: string, accountId: string): Promise<BrokerAccount>;
   recordConnectionOutcome(
     userId: string,

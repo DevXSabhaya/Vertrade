@@ -25,10 +25,16 @@ export class BrokerPositionProvider {
   async fetch(local: LocalPositionView): Promise<BrokerPositionView> {
     const [entry, exit] = await Promise.all([
       local.entryOrderId
-        ? this.orderExecutor.getOrderStatus(local.entryOrderId)
+        ? this.orderExecutor.getOrderStatus(
+            local.entryOrderId,
+            local.brokerAccountId,
+          )
         : Promise.resolve(null),
       local.exitOrderId
-        ? this.orderExecutor.getOrderStatus(local.exitOrderId)
+        ? this.orderExecutor.getOrderStatus(
+            local.exitOrderId,
+            local.brokerAccountId,
+          )
         : Promise.resolve(null),
     ]);
 

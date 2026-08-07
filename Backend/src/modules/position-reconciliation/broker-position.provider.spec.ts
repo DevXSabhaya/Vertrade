@@ -23,6 +23,7 @@ function local(overrides: Partial<LocalPositionView> = {}): LocalPositionView {
     tradeState: TradeState.ACTIVE,
     entryOrderId: 'E-1',
     exitOrderId: null,
+    brokerAccountId: null,
     ...overrides,
   };
 }
@@ -45,7 +46,7 @@ describe('BrokerPositionProvider', () => {
 
     const view = await provider.fetch(local());
 
-    expect(orderExecutor.getOrderStatus).toHaveBeenCalledWith('E-1');
+    expect(orderExecutor.getOrderStatus).toHaveBeenCalledWith('E-1', null);
     expect(view.entryOrderStatus).toBe(OrderStatus.FILLED);
     expect(view.entryFilledQuantity).toBe(50);
     expect(view.entryAveragePrice).toBe(100);

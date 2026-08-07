@@ -26,7 +26,7 @@ export class BrokerTokenRepository implements IBrokerTokenRepository {
   ) {}
 
   async save(
-    userId: string,
+    accountId: string,
     broker: string,
     session: BrokerSession,
   ): Promise<void> {
@@ -43,15 +43,15 @@ export class BrokerTokenRepository implements IBrokerTokenRepository {
 
     await this.model
       .findOneAndUpdate(
-        { userId, broker },
-        { $set: { encryptedPayload, expiresAt: session.expiresAt } },
+        { accountId },
+        { $set: { broker, encryptedPayload, expiresAt: session.expiresAt } },
         { new: true, upsert: true, setDefaultsOnInsert: true },
       )
       .exec();
   }
 
-  async find(userId: string, broker: string): Promise<BrokerSession | null> {
-    const doc = await this.model.findOne({ userId, broker }).exec();
+  async find(accountId: string, broker: string): Promise<BrokerSession | null> {
+    const doc = await this.model.findOne({ accountId, broker }).exec();
     if (!doc) {
       return null;
     }
@@ -70,7 +70,7 @@ export class BrokerTokenRepository implements IBrokerTokenRepository {
     );
   }
 
-  async clear(userId: string, broker: string): Promise<void> {
-    await this.model.deleteOne({ userId, broker }).exec();
+  async clear(accountId: string, broker: string): Promise<void> {
+    await this.model.deleteOne({ accountId, broker }).exec();
   }
 }

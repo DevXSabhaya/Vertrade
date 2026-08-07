@@ -11,6 +11,7 @@ import {
 function buildItem(clock: FakeClock): QueueItem {
   return new QueueItem(
     'item-1',
+    'user-1',
     'idem-1',
     QueueItemType.CREATE_TRADE,
     buildRequest(),

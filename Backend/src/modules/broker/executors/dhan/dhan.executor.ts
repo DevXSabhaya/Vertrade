@@ -4,9 +4,10 @@ import type {
   BrokerHttpRequest,
   IBrokerHttpClient,
 } from '@modules/broker/broker-auth/interfaces/broker-http-client.interface';
-import { BrokerCredentialsProvider } from '@modules/broker/broker-auth/broker-credentials.provider';
 import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import type { BrokerSession } from '@modules/broker/broker-auth/entities/broker-session.entity';
+import { BROKER_ACCOUNT_REPOSITORY } from '@modules/broker/broker-account/broker-account.constants';
+import type { IBrokerAccountRepository } from '@modules/broker/broker-account/repository/broker-account-repository.interface';
 import { ConfigService } from '@core/config/config.service';
 import type { IOrderExecutor } from '../order-executor.interface';
 import { LiveOrderSafetyGateService } from '../live-order-safety-gate.service';
@@ -43,6 +44,14 @@ import {
  * live credentials). Verify against a real/sandbox account before enabling
  * Live trading, same caveat as the broker-auth and instrument-master Dhan
  * adapters.
+ *
+ * Every public method requires the caller's `accountId` — the specific
+ * `BrokerAccount` whose own session (`BrokerSessionManager`) and own
+ * credentials (client ID, for the Dhan order body) this order routes
+ * through. There is deliberately no env-configured fallback identity here:
+ * a `null` accountId is a programmer error (this executor is only ever
+ * reached for a trade already pinned to a real, owned account) and throws
+ * immediately rather than silently using some other identity.
  */
 @Injectable()
 export class DhanExecutor implements IOrderExecutor {
@@ -56,14 +65,20 @@ export class DhanExecutor implements IOrderExecutor {
   private readonly exitedOrderIds = new Set<string>();
 
   constructor(
-    private readonly credentialsProvider: BrokerCredentialsProvider,
+    @Inject(BROKER_ACCOUNT_REPOSITORY)
+    private readonly brokerAccountRepository: IBrokerAccountRepository,
     private readonly sessionManager: BrokerSessionManager,
     private readonly liveOrderSafetyGate: LiveOrderSafetyGateService,
     private readonly configService: ConfigService,
     @Inject(ORDER_HTTP_CLIENT) private readonly httpClient: IBrokerHttpClient,
   ) {}
 
-  async placeEntryOrder(request: OrderRequest): Promise<OrderResponse> {
+  async placeEntryOrder(
+    request: OrderRequest,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    const resolvedAccountId = this.requireAccountId(accountId);
+
     // The last gate before a real broker call for a genuine new entry — see
     // LiveOrderSafetyGateService's docstring. `exitPosition` deliberately
     // calls `submitOrder` directly, bypassing this gate entirely: a
@@ -71,21 +86,28 @@ export class DhanExecutor implements IOrderExecutor {
     // never be blocked by a missing per-order confirmation flag or a stale
     // health snapshot — that would turn a safety mechanism into a hazard.
     const confirmed = request.metadata?.liveTradingConfirmed === true;
-    const gateResult =
-      await this.liveOrderSafetyGate.checkEntryAllowed(confirmed);
+    const gateResult = await this.liveOrderSafetyGate.checkEntryAllowed(
+      confirmed,
+      resolvedAccountId,
+    );
     if (!gateResult.allowed) {
       throw new OrderPlacementException(
         `Live order blocked by safety gate: ${gateResult.reason}`,
       );
     }
 
-    return this.submitOrder(request);
+    return this.submitOrder(request, resolvedAccountId);
   }
 
-  private async submitOrder(request: OrderRequest): Promise<OrderResponse> {
+  private async submitOrder(
+    request: OrderRequest,
+    accountId: string,
+  ): Promise<OrderResponse> {
+    const credentials =
+      await this.brokerAccountRepository.getCredentialsByAccountId(accountId);
     const body = buildPlaceOrderRequestBody(
       request,
-      this.credentialsProvider.getCredentials().clientId,
+      credentials.clientId,
       randomUUID(),
     );
     const responseBody = await this.request(
@@ -93,6 +115,7 @@ export class DhanExecutor implements IOrderExecutor {
       body,
       isDhanOrderMutationResponseBody,
       'POST',
+      accountId,
     );
 
     if (responseBody.orderStatus === 'REJECTED') {
@@ -101,18 +124,27 @@ export class DhanExecutor implements IOrderExecutor {
       );
     }
 
-    return this.getOrderStatus(responseBody.orderId);
+    return this.getOrderStatus(responseBody.orderId, accountId);
   }
 
   async modifyOrder(
     brokerOrderId: string,
     changes: OrderModification,
+    accountId: string | null,
   ): Promise<OrderResponse> {
-    const entry = await this.findOrderBookEntry(brokerOrderId);
+    const resolvedAccountId = this.requireAccountId(accountId);
+    const entry = await this.findOrderBookEntry(
+      brokerOrderId,
+      resolvedAccountId,
+    );
+    const credentials =
+      await this.brokerAccountRepository.getCredentialsByAccountId(
+        resolvedAccountId,
+      );
     const body = buildModifyOrderRequestBody(
       entry,
       changes,
-      this.credentialsProvider.getCredentials().clientId,
+      credentials.clientId,
     );
 
     await this.request(
@@ -120,6 +152,7 @@ export class DhanExecutor implements IOrderExecutor {
       body,
       isDhanOrderMutationResponseBody,
       'PUT',
+      resolvedAccountId,
     ).catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : 'Unknown transport error';
@@ -128,15 +161,23 @@ export class DhanExecutor implements IOrderExecutor {
       );
     });
 
-    return this.getOrderStatus(brokerOrderId);
+    return this.getOrderStatus(brokerOrderId, resolvedAccountId);
   }
 
-  async cancelOrder(brokerOrderId: string): Promise<OrderResponse> {
+  async cancelOrder(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    const resolvedAccountId = this.requireAccountId(accountId);
+
     // Check current status first: an unknown id fails with OrderNotFoundException,
     // and an already-terminal order (filled/cancelled/rejected/exited) is
     // rejected locally rather than relying on Dhan's cancel endpoint to
     // enforce that business rule consistently.
-    const currentStatus = await this.getOrderStatus(brokerOrderId);
+    const currentStatus = await this.getOrderStatus(
+      brokerOrderId,
+      resolvedAccountId,
+    );
     if (
       currentStatus.status !== OrderStatus.OPEN &&
       currentStatus.status !== OrderStatus.PARTIALLY_FILLED
@@ -151,6 +192,7 @@ export class DhanExecutor implements IOrderExecutor {
       undefined,
       isDhanOrderMutationResponseBody,
       'DELETE',
+      resolvedAccountId,
     ).catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : 'Unknown transport error';
@@ -159,14 +201,19 @@ export class DhanExecutor implements IOrderExecutor {
       );
     });
 
-    return this.getOrderStatus(brokerOrderId);
+    return this.getOrderStatus(brokerOrderId, resolvedAccountId);
   }
 
   async exitPosition(
     brokerOrderId: string,
     exitRequest: ExitRequest,
+    accountId: string | null,
   ): Promise<OrderResponse> {
-    const entry = await this.findOrderBookEntry(brokerOrderId);
+    const resolvedAccountId = this.requireAccountId(accountId);
+    const entry = await this.findOrderBookEntry(
+      brokerOrderId,
+      resolvedAccountId,
+    );
     const filledQuantity = entry.filledQty;
 
     if (!Number.isFinite(filledQuantity) || filledQuantity <= 0) {
@@ -194,13 +241,23 @@ export class DhanExecutor implements IOrderExecutor {
       exitRequest.price,
     );
 
-    const exitResponse = await this.submitOrder(exitOrderRequest);
+    const exitResponse = await this.submitOrder(
+      exitOrderRequest,
+      resolvedAccountId,
+    );
     this.exitedOrderIds.add(brokerOrderId);
     return exitResponse;
   }
 
-  async getOrderStatus(brokerOrderId: string): Promise<OrderResponse> {
-    const entry = await this.findOrderBookEntry(brokerOrderId);
+  async getOrderStatus(
+    brokerOrderId: string,
+    accountId: string | null,
+  ): Promise<OrderResponse> {
+    const resolvedAccountId = this.requireAccountId(accountId);
+    const entry = await this.findOrderBookEntry(
+      brokerOrderId,
+      resolvedAccountId,
+    );
     const response = mapOrderBookEntryToResponse(entry);
 
     if (this.exitedOrderIds.has(brokerOrderId)) {
@@ -217,14 +274,25 @@ export class DhanExecutor implements IOrderExecutor {
     return response;
   }
 
+  private requireAccountId(accountId: string | null): string {
+    if (!accountId) {
+      throw new OrderPlacementException(
+        'DhanExecutor requires a broker account id — this is a Live-only executor and must never be called without one',
+      );
+    }
+    return accountId;
+  }
+
   private async findOrderBookEntry(
     brokerOrderId: string,
+    accountId: string,
   ): Promise<DhanOrderBookEntry> {
     const entries = await this.request(
       DHAN_ORDERS_PATH,
       undefined,
       isDhanOrderBookResponseBody,
       'GET',
+      accountId,
     );
 
     const entry = entries.find(
@@ -243,14 +311,16 @@ export class DhanExecutor implements IOrderExecutor {
     body: unknown,
     isValidResponse: (value: unknown) => value is T,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    accountId: string,
   ): Promise<T> {
-    const session = await this.sessionManager.ensureSession();
+    const session = await this.sessionManager.ensureSession(accountId);
     return this.performRequest<T>(
       path,
       body,
       isValidResponse,
       method,
       session,
+      accountId,
       false,
     );
   }
@@ -261,6 +331,7 @@ export class DhanExecutor implements IOrderExecutor {
     isValidResponse: (value: unknown) => value is T,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     session: BrokerSession,
+    accountId: string,
     isRetry: boolean,
   ): Promise<T> {
     const httpRequest: BrokerHttpRequest = {
@@ -278,13 +349,14 @@ export class DhanExecutor implements IOrderExecutor {
     // would throw a misleading "unexpected shape" error instead of
     // transparently refreshing the session and retrying.
     if (!isRetry && this.isSessionExpired(response.status, response.body)) {
-      const refreshedSession = await this.sessionManager.refresh();
+      const refreshedSession = await this.sessionManager.refresh(accountId);
       return this.performRequest<T>(
         path,
         body,
         isValidResponse,
         method,
         refreshedSession,
+        accountId,
         true,
       );
     }

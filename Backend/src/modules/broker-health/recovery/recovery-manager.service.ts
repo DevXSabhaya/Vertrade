@@ -62,11 +62,23 @@ export class RecoveryManagerService {
     await this.marketDataService.start();
   }
 
+  /**
+   * Best-effort, per-account: refreshes every session currently loaded in
+   * memory (`getAllActiveAccountIds()`), independently. Unlike the old
+   * single-session model, this never falls back to a fresh credential-based
+   * login — that requires knowing which `BrokerAccount`'s credentials to
+   * use, which belongs to `BrokerAccountService.reconnect()`/the token
+   * renewal scheduler's bootstrap flow, not this infra-level
+   * websocket/session-refresh recovery. A session lost entirely (not just
+   * expired) is picked back up the next time its owning user's trading
+   * activity calls `ensureSession(accountId)`.
+   */
   private async ensureValidSession(): Promise<void> {
-    try {
-      await this.sessionManager.refresh();
-    } catch {
-      await this.sessionManager.login();
-    }
+    const accountIds = this.sessionManager.getAllActiveAccountIds();
+    await Promise.all(
+      accountIds.map((accountId) =>
+        this.sessionManager.refresh(accountId).catch(() => undefined),
+      ),
+    );
   }
 }

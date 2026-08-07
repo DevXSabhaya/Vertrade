@@ -4,11 +4,13 @@ import { HealthSnapshotUpdatedEvent } from '@modules/broker-health/events/health
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 import type { HealthSnapshot } from '@modules/broker-health/models/health-snapshot.model';
 import type { FeatureFlagsService } from '@core/feature-flags/feature-flag.service';
-import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
+import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
 import {
   LiveOrderSafetyGateService,
   LIVE_TRADING_ENABLED_FLAG,
 } from './live-order-safety-gate.service';
+
+const ACCOUNT_ID = 'acc-1';
 
 function healthySnapshot(
   overrides: Partial<HealthSnapshot> = {},
@@ -35,13 +37,13 @@ function healthySnapshot(
 
 function build(
   options: {
-    tradingMode?: 'PAPER' | 'LIVE';
+    sessionValid?: boolean;
     liveTradingFlagEnabled?: boolean;
   } = {},
 ) {
-  const tradingModeService = {
-    getCurrentMode: jest.fn().mockReturnValue(options.tradingMode ?? 'LIVE'),
-  } as unknown as jest.Mocked<TradingModeService>;
+  const sessionManager = {
+    isSessionValid: jest.fn().mockReturnValue(options.sessionValid ?? true),
+  } as unknown as jest.Mocked<BrokerSessionManager>;
   const featureFlagsService = {
     isEnabled: jest
       .fn()
@@ -50,29 +52,29 @@ function build(
   const eventBus = new EventEmitterEventBus(new EventEmitter2());
 
   const gate = new LiveOrderSafetyGateService(
-    tradingModeService,
+    sessionManager,
     featureFlagsService,
     eventBus,
   );
 
-  return { gate, eventBus, featureFlagsService, tradingModeService };
+  return { gate, eventBus, featureFlagsService, sessionManager };
 }
 
 describe('LiveOrderSafetyGateService', () => {
-  it("blocks — never silently allows — when the deployment's current mode is not LIVE, even for an already-armed live trade", async () => {
-    const { gate } = build({ tradingMode: 'PAPER' });
+  it('blocks — never silently allows — when the account has no valid broker session, even for an already-armed live trade', async () => {
+    const { gate } = build({ sessionValid: false });
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/not currently in live mode/i);
+    expect(result.reason).toMatch(/no longer has a valid session/i);
   });
 
   it('blocks a LIVE entry with no explicit confirmation', async () => {
-    const { gate, eventBus } = build({ tradingMode: 'LIVE' });
+    const { gate, eventBus } = build();
     eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
 
-    const result = await gate.checkEntryAllowed(false);
+    const result = await gate.checkEntryAllowed(false, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toMatch(/explicit per-order confirmation/i);
@@ -80,12 +82,11 @@ describe('LiveOrderSafetyGateService', () => {
 
   it('blocks a LIVE entry when the LIVE_TRADING_ENABLED feature flag is off, even if confirmed', async () => {
     const { gate, eventBus, featureFlagsService } = build({
-      tradingMode: 'LIVE',
       liveTradingFlagEnabled: false,
     });
     eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain(LIVE_TRADING_ENABLED_FLAG);
@@ -95,68 +96,66 @@ describe('LiveOrderSafetyGateService', () => {
   });
 
   it('blocks a LIVE entry when no health snapshot has ever been received (fail-safe default)', async () => {
-    const { gate } = build({ tradingMode: 'LIVE' });
+    const { gate } = build();
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toMatch(/no broker health snapshot/i);
   });
 
   it('blocks a LIVE entry when overall broker health is not HEALTHY', async () => {
-    const { gate, eventBus } = build({ tradingMode: 'LIVE' });
+    const { gate, eventBus } = build();
     eventBus.publish(
       new HealthSnapshotUpdatedEvent(
         healthySnapshot({ overallStatus: HealthStatus.DEGRADED }),
       ),
     );
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toMatch(/broker health is not healthy/i);
   });
 
   it('blocks a LIVE entry when broker authentication specifically is not HEALTHY, even if overall is healthy', async () => {
-    const { gate, eventBus } = build({ tradingMode: 'LIVE' });
+    const { gate, eventBus } = build();
     eventBus.publish(
       new HealthSnapshotUpdatedEvent(
         healthySnapshot({ authStatus: HealthStatus.DISCONNECTED }),
       ),
     );
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toMatch(/broker authentication is not healthy/i);
   });
 
   it('allows a LIVE entry only when confirmed + flag enabled + broker fully healthy', async () => {
-    const { gate, eventBus } = build({ tradingMode: 'LIVE' });
+    const { gate, eventBus } = build();
     eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result).toEqual({ allowed: true, reason: null });
   });
 
-  it('switches from allowed to blocked mid-flight when the current mode changes away from LIVE — no caching of the earlier decision', async () => {
-    const { gate, eventBus, tradingModeService } = build({
-      tradingMode: 'LIVE',
-    });
+  it('switches from allowed to blocked mid-flight when the account session becomes invalid — no caching of the earlier decision', async () => {
+    const { gate, eventBus, sessionManager } = build();
     eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
 
-    expect((await gate.checkEntryAllowed(true)).allowed).toBe(true);
+    expect((await gate.checkEntryAllowed(true, ACCOUNT_ID)).allowed).toBe(true);
 
-    tradingModeService.getCurrentMode.mockReturnValue('PAPER');
+    sessionManager.isSessionValid.mockReturnValue(false);
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
     expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/not currently in live mode/i);
+    expect(result.reason).toMatch(/no longer has a valid session/i);
   });
 
   it('reflects the latest snapshot, not a stale earlier one', async () => {
-    const { gate, eventBus } = build({ tradingMode: 'LIVE' });
+    const { gate, eventBus } = build();
     eventBus.publish(new HealthSnapshotUpdatedEvent(healthySnapshot()));
     eventBus.publish(
       new HealthSnapshotUpdatedEvent(
@@ -164,7 +163,7 @@ describe('LiveOrderSafetyGateService', () => {
       ),
     );
 
-    const result = await gate.checkEntryAllowed(true);
+    const result = await gate.checkEntryAllowed(true, ACCOUNT_ID);
 
     expect(result.allowed).toBe(false);
   });

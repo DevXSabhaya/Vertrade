@@ -152,7 +152,10 @@ export class TradingEngineService {
 
     if (trade.state === TradeState.ENTRY_PENDING && trade.entryOrderId) {
       try {
-        await this.executorFor(trade).cancelOrder(trade.entryOrderId);
+        await this.executorFor(trade).cancelOrder(
+          trade.entryOrderId,
+          trade.brokerAccountId,
+        );
       } catch (error) {
         trade.markFailed(this.reasonOf(error), this.clock);
         this.publishDomainEvents(trade);
@@ -281,6 +284,7 @@ export class TradingEngineService {
     try {
       response = await this.executorFor(trade).placeEntryOrder(
         this.buildEntryOrderRequest(trade),
+        trade.brokerAccountId,
       );
     } catch (error) {
       trade.markEntryOrderFailed(this.reasonOf(error), this.clock);
@@ -304,6 +308,7 @@ export class TradingEngineService {
       response = await this.executorFor(trade).exitPosition(
         trade.entryOrderId as string,
         new ExitRequest(quantity, price),
+        trade.brokerAccountId,
       );
     } catch {
       trade.markExitAttemptFailed();

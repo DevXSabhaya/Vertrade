@@ -6,8 +6,9 @@ import type { HydratedDocument } from 'mongoose';
   timestamps: { createdAt: false, updatedAt: 'updatedAt' },
 })
 export class BrokerTokenDocumentSchema {
-  @Prop({ required: true })
-  userId!: string;
+  /** A `BrokerAccount.accountId` — already globally unique, already implies both owning user and broker. One stored token per account. */
+  @Prop({ required: true, unique: true })
+  accountId!: string;
 
   @Prop({ required: true })
   broker!: string;
@@ -26,4 +27,3 @@ export type BrokerTokenDocument = HydratedDocument<BrokerTokenDocumentSchema>;
 export const BrokerTokenMongooseSchema = SchemaFactory.createForClass(
   BrokerTokenDocumentSchema,
 );
-BrokerTokenMongooseSchema.index({ userId: 1, broker: 1 }, { unique: true });

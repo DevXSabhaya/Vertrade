@@ -1,29 +1,50 @@
-import type { ConfigService } from '@core/config/config.service';
 import type { TradingModeService } from '@modules/trading-mode/trading-mode.service';
+import type { AuthenticatedUser } from '@modules/auth/models/authenticated-user.model';
 import { BusinessException } from '@common/exceptions/business.exception';
 import { AppConfigController } from './app-config.controller';
 
 function buildController(options: {
   tradingMode: 'PAPER' | 'LIVE';
-  defaultTradingMode?: 'PAPER' | 'LIVE';
+  selectedBrokerAccountId?: string | null;
 }): {
   controller: AppConfigController;
-  tradingModeService: { getCurrentMode: jest.Mock; setMode: jest.Mock };
+  tradingModeService: {
+    getPreference: jest.Mock;
+    setMode: jest.Mock;
+    setSelectedBroker: jest.Mock;
+  };
 } {
-  const configService = {
-    tradingMode: options.defaultTradingMode ?? options.tradingMode,
-  } as unknown as ConfigService;
-  let currentMode = options.tradingMode;
+  let current = {
+    tradingMode: options.tradingMode,
+    selectedBrokerAccountId: options.selectedBrokerAccountId ?? null,
+  };
   const tradingModeService = {
-    getCurrentMode: jest.fn(() => currentMode),
-    setMode: jest.fn((mode: 'PAPER' | 'LIVE') => {
-      currentMode = mode;
-      return Promise.resolve(mode);
-    }),
+    getPreference: jest.fn(() =>
+      Promise.resolve({
+        userId: 'u1',
+        ...current,
+        updatedAt: new Date(),
+      }),
+    ),
+    setMode: jest.fn(
+      (
+        _userId: string,
+        mode: 'PAPER' | 'LIVE',
+        _changedBy: string,
+        brokerAccountId?: string,
+      ) => {
+        current = {
+          tradingMode: mode,
+          selectedBrokerAccountId:
+            mode === 'LIVE' ? (brokerAccountId ?? null) : null,
+        };
+        return Promise.resolve(mode);
+      },
+    ),
+    setSelectedBroker: jest.fn(),
   };
 
   const controller = new AppConfigController(
-    configService,
     tradingModeService as unknown as TradingModeService,
   );
 
@@ -31,43 +52,48 @@ function buildController(options: {
 }
 
 describe('AppConfigController', () => {
+  const user: AuthenticatedUser = {
+    userId: 'u1',
+    email: 'trader@example.com',
+  };
+
   describe('getTradingMode', () => {
-    it('reports the current trading mode from TradingModeService', () => {
-      const { controller } = buildController({
+    it('reports the current trading mode from TradingModeService', async () => {
+      const { controller } = buildController({ tradingMode: 'PAPER' });
+      await expect(controller.getTradingMode(user)).resolves.toEqual({
         tradingMode: 'PAPER',
-        defaultTradingMode: 'PAPER',
-      });
-      expect(controller.getTradingMode()).toEqual({
-        tradingMode: 'PAPER',
-        defaultTradingMode: 'PAPER',
+        selectedBrokerAccountId: null,
       });
     });
 
-    it('reports LIVE as the current mode independently of the env default', () => {
+    it('reports LIVE as the current mode independently of the env default', async () => {
       const { controller } = buildController({
         tradingMode: 'LIVE',
-        defaultTradingMode: 'PAPER',
+        selectedBrokerAccountId: 'acc-1',
       });
-      expect(controller.getTradingMode()).toEqual({
+      await expect(controller.getTradingMode(user)).resolves.toEqual({
         tradingMode: 'LIVE',
-        defaultTradingMode: 'PAPER',
+        selectedBrokerAccountId: 'acc-1',
       });
     });
   });
 
   describe('setTradingMode', () => {
-    const user = { userId: 'u1', email: 'trader@example.com' };
-
     it('delegates to TradingModeService.setMode with the caller identity and returns the new mode', async () => {
       const { controller, tradingModeService } = buildController({
         tradingMode: 'PAPER',
       });
 
-      const result = await controller.setTradingMode(user, { mode: 'LIVE' });
+      const result = await controller.setTradingMode(user, {
+        mode: 'LIVE',
+        brokerAccountId: 'acc-1',
+      });
 
       expect(tradingModeService.setMode).toHaveBeenCalledWith(
+        'u1',
         'LIVE',
         'trader@example.com',
+        'acc-1',
       );
       expect(result.tradingMode).toBe('LIVE');
     });
@@ -81,9 +107,14 @@ describe('AppConfigController', () => {
       );
 
       await expect(
-        controller.setTradingMode(user, { mode: 'LIVE' }),
+        controller.setTradingMode(user, {
+          mode: 'LIVE',
+          brokerAccountId: 'acc-1',
+        }),
       ).rejects.toThrow(BusinessException);
-      expect(controller.getTradingMode().tradingMode).toBe('PAPER');
+      await expect(controller.getTradingMode(user)).resolves.toEqual(
+        expect.objectContaining({ tradingMode: 'PAPER' }),
+      );
     });
   });
 });

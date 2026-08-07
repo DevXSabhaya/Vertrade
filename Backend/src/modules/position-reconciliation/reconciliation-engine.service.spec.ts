@@ -24,6 +24,7 @@ function local(overrides: Partial<LocalPositionView> = {}): LocalPositionView {
     tradeState: TradeState.ACTIVE,
     entryOrderId: 'E-1',
     exitOrderId: null,
+    brokerAccountId: null,
     ...overrides,
   };
 }

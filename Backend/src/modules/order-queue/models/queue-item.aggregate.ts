@@ -28,6 +28,8 @@ export class QueueItem {
 
   constructor(
     public readonly id: string,
+    /** The user who submitted this trade — resolved into `CreateTradeParams.mode`/`brokerAccountId` at the moment of actual execution (`QueueWorker.buildCreateTradeParams`), not at submission time, since a queued item can wait a long time before that runs. */
+    public readonly userId: string,
     public readonly idempotencyKey: string,
     public readonly orderType: QueueItemType,
     public readonly request: TradeValidationRequest,
@@ -71,6 +73,7 @@ export class QueueItem {
   static fromSnapshot(snapshot: QueueItemSnapshot): QueueItem {
     const item = new QueueItem(
       snapshot.id,
+      snapshot.userId,
       snapshot.idempotencyKey,
       snapshot.orderType,
       snapshot.request,
@@ -158,6 +161,7 @@ export class QueueItem {
   toSnapshot(): QueueItemSnapshot {
     return {
       id: this.id,
+      userId: this.userId,
       idempotencyKey: this.idempotencyKey,
       orderType: this.orderType,
       state: this._state,

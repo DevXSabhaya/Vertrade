@@ -9,6 +9,10 @@ export class QueueItemDocumentSchema {
   @Prop({ required: true, unique: true })
   itemId!: string;
 
+  /** The user who submitted this trade — resolved into the trade's `mode`/`brokerAccountId` at actual execution time. See `QueueItem`'s own docstring for why this is stored rather than resolved once at submission. */
+  @Prop({ required: true })
+  userId!: string;
+
   @Prop({ required: true, unique: true })
   idempotencyKey!: string;
 

@@ -93,6 +93,7 @@ describe('ExitManager', () => {
       initialStopLoss: 95,
       targets: [110, 120],
       mode: 'PAPER',
+      brokerAccountId: null,
       ...overrides,
     });
     await tradingEngineService.handleMarketPriceUpdate(
@@ -170,6 +171,7 @@ describe('ExitManager', () => {
       const t2 = await activeTrade({
         instrumentToken: 'TOKEN-2',
         mode: 'LIVE',
+        brokerAccountId: 'acc-1',
       });
       executor.exitPosition.mockResolvedValue(
         new OrderResponse('X-1', OrderStatus.FILLED, 50, 105, new Date()),
@@ -200,6 +202,7 @@ describe('ExitManager', () => {
       const liveTrade = await activeTrade({
         instrumentToken: 'TOKEN-2',
         mode: 'LIVE',
+        brokerAccountId: 'acc-1',
       });
       executor.exitPosition.mockResolvedValue(
         new OrderResponse('X-1', OrderStatus.FILLED, 50, 105, new Date()),

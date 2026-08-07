@@ -5,9 +5,11 @@ export class TradingModeChangedEvent extends DomainEvent {
   readonly eventName = 'trading-mode.changed';
 
   constructor(
+    public readonly userId: string,
     public readonly mode: TradingMode,
     public readonly previousMode: TradingMode,
     public readonly changedBy: string,
+    public readonly selectedBrokerAccountId: string | null,
   ) {
     super();
   }

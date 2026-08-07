@@ -161,6 +161,7 @@ export class OrderQueueService implements OnModuleInit {
 
     const item = new QueueItem(
       randomUUID(),
+      requesterId,
       idempotencyKey,
       QueueItemType.CREATE_TRADE,
       request,

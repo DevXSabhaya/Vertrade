@@ -89,7 +89,7 @@ describe('BrokerFactory', () => {
     await expect(auth.login()).rejects.toThrow(/Angel One/);
 
     const executor = factory.getExecutor(BrokerId.ANGEL_ONE);
-    await expect(executor.placeEntryOrder({} as never)).rejects.toThrow(
+    await expect(executor.placeEntryOrder({} as never, null)).rejects.toThrow(
       BrokerNotImplementedException,
     );
   });

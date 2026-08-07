@@ -1,12 +1,6 @@
-import {
-  Inject,
-  Injectable,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
-import { SYSTEM_USER_ID } from '@shared/constants/system-user.constant';
 import {
   ACTIVE_BROKER_NAME,
   BROKER_AUTH,
@@ -24,44 +18,55 @@ import { BrokerLogoutCompletedEvent } from './events/broker-logout-completed.eve
 
 import { BrokerSessionExpiredException } from './exceptions/broker-session-expired.exception';
 
-/**
- * Owns the single active broker session for this process: restoring it from
- * secure storage on startup, logging in, refreshing, and logging out — all
- * while publishing the events other modules (audit/app logs, future Broker
- * Health Monitor) observe rather than calling them directly.
- */
 export type BrokerAuthState =
   'AUTHENTICATED' | 'DISCONNECTED' | 'REAUTH_REQUIRED';
 
-@Injectable()
-export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
-  private currentSession: BrokerSession | null = null;
+interface AccountSessionState {
+  session: BrokerSession | null;
   /**
    * Distinguishes "no session because nothing has ever been attempted / a
    * deliberate logout" (DISCONNECTED) from "an authentication or renewal
-   * attempt was made and failed" (REAUTH_REQUIRED) — both leave
-   * `currentSession` null, but only the latter means a human needs to paste
-   * a fresh token via the reconnect endpoint. Reset to false on any
-   * successful login/refresh/reconnect and on a deliberate logout.
+   * attempt was made and failed" (REAUTH_REQUIRED) — both leave `session`
+   * null, but only the latter means a human needs to paste a fresh token
+   * via the reconnect endpoint. Reset to false on any successful
+   * login/refresh/reconnect and on a deliberate logout.
    */
-  private reauthRequired = false;
-  private lastRefreshedAt: Date | null = null;
-  private lastAuthEventAt: Date | null = null;
+  reauthRequired: boolean;
+  lastRefreshedAt: Date | null;
+  lastAuthEventAt: Date | null;
   /**
-   * Single-flight guard for login()/refresh(). Without this, two callers
-   * hitting an expired session at nearly the same time (e.g. an order
-   * placement and the market-data WebSocket both reconnecting) would each
-   * independently call the real broker auth endpoint. That's wasteful for
-   * login, but actively dangerous for refresh: DhanHQ's RenewToken
-   * invalidates the token it's called with and issues a new one, so a
-   * second concurrent refresh can invalidate the first refresh's
-   * just-issued token before anything gets to use it, or the two
-   * `this.currentSession = refreshed` assignments can race and leave the
-   * in-memory session and the persisted token repository holding two
-   * different tokens. Every concurrent caller now shares the exact same
-   * in-flight attempt instead.
+   * Single-flight guard for login()/refresh(), scoped per account. Without
+   * this, two callers hitting the same account's expired session at nearly
+   * the same time would each independently call the real broker auth
+   * endpoint — wasteful for login, actively dangerous for refresh (DhanHQ's
+   * RenewToken invalidates the token it's called with). Every concurrent
+   * caller for *that account* now shares the exact same in-flight attempt;
+   * a different account's concurrent auth is entirely independent.
    */
-  private pendingAuth: Promise<BrokerSession> | null = null;
+  pendingAuth: Promise<BrokerSession> | null;
+}
+
+function createEmptyState(): AccountSessionState {
+  return {
+    session: null,
+    reauthRequired: false,
+    lastRefreshedAt: null,
+    lastAuthEventAt: null,
+    pendingAuth: null,
+  };
+}
+
+/**
+ * Owns one independent broker session per `BrokerAccount` (keyed by
+ * `accountId`) — not a single process-wide session. Two accounts (whether
+ * owned by the same user or different users) never share state: refreshing,
+ * expiring, or logging out one account's session has zero effect on any
+ * other account's. Every public method takes the `accountId` it operates
+ * on; there is deliberately no "the current session" concept left.
+ */
+@Injectable()
+export class BrokerSessionManager implements OnModuleDestroy {
+  private readonly states = new Map<string, AccountSessionState>();
 
   constructor(
     @Inject(BROKER_AUTH) private readonly brokerAuth: IBrokerAuth,
@@ -71,165 +76,179 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     @Inject(ACTIVE_BROKER_NAME) private readonly brokerName: string,
   ) {}
 
-  async onModuleInit(): Promise<void> {
-    await this.restoreSession();
-  }
-
+  /** Graceful shutdown: logs out every account that currently holds a session, independently — one account's logout failure never blocks another's. */
   async onModuleDestroy(): Promise<void> {
-    if (this.currentSession) {
-      await this.logout().catch(() => undefined);
-    }
+    await Promise.all(
+      this.getAllActiveAccountIds().map((accountId) =>
+        this.logout(accountId).catch(() => undefined),
+      ),
+    );
   }
 
-  async restoreSession(): Promise<BrokerSession | null> {
-    const stored = await this.tokenRepository.find(
-      SYSTEM_USER_ID,
-      this.brokerName,
-    );
+  private stateFor(accountId: string): AccountSessionState {
+    let state = this.states.get(accountId);
+    if (!state) {
+      state = createEmptyState();
+      this.states.set(accountId, state);
+    }
+    return state;
+  }
+
+  /** Every account that currently holds a session in memory — used by the token-renewal scheduler, health indicators, and recovery to iterate instead of assuming one global session. */
+  getAllActiveAccountIds(): string[] {
+    return [...this.states.entries()]
+      .filter(([, state]) => state.session !== null)
+      .map(([accountId]) => accountId);
+  }
+
+  async restoreSession(accountId: string): Promise<BrokerSession | null> {
+    const state = this.stateFor(accountId);
+    const stored = await this.tokenRepository.find(accountId, this.brokerName);
     if (stored) {
       if (this.brokerAuth.validateSession(stored)) {
-        this.currentSession = stored;
-        this.reauthRequired = false;
+        state.session = stored;
+        state.reauthRequired = false;
         return stored;
       } else {
-        this.currentSession = null;
-        this.reauthRequired = true;
+        state.session = null;
+        state.reauthRequired = true;
         return null;
       }
     }
-    this.currentSession = null;
-    this.reauthRequired = false;
+    state.session = null;
+    state.reauthRequired = false;
     return null;
   }
 
-  getActiveSession(): BrokerSession | null {
-    return this.currentSession;
+  getActiveSession(accountId: string): BrokerSession | null {
+    return this.states.get(accountId)?.session ?? null;
   }
 
-  isSessionValid(): boolean {
-    return (
-      this.currentSession !== null &&
-      this.brokerAuth.validateSession(this.currentSession)
-    );
+  isSessionValid(accountId: string): boolean {
+    const session = this.getActiveSession(accountId);
+    return session !== null && this.brokerAuth.validateSession(session);
   }
 
-  async ensureSession(): Promise<BrokerSession> {
-    if (this.pendingAuth) {
-      return this.pendingAuth;
+  async ensureSession(accountId: string): Promise<BrokerSession> {
+    const state = this.stateFor(accountId);
+    if (state.pendingAuth) {
+      return state.pendingAuth;
     }
-    if (
-      this.currentSession &&
-      this.brokerAuth.validateSession(this.currentSession)
-    ) {
-      return this.currentSession;
+    if (state.session && this.brokerAuth.validateSession(state.session)) {
+      return state.session;
     }
-    const restored = await this.restoreSession();
+    const restored = await this.restoreSession(accountId);
     if (restored) {
       return restored;
     }
-    this.reauthRequired = true;
+    state.reauthRequired = true;
     throw new BrokerSessionExpiredException(
-      'No active broker session exists. Reauthentication is required.',
+      `No active broker session exists for this account. Reauthentication is required.`,
     );
   }
 
   async login(
+    accountId: string,
     overrideAccessToken?: string,
     overrideClientId?: string,
   ): Promise<BrokerSession> {
-    if (this.pendingAuth) {
-      return this.pendingAuth;
+    const state = this.stateFor(accountId);
+    if (state.pendingAuth) {
+      return state.pendingAuth;
     }
-    this.pendingAuth = this.performLogin(overrideAccessToken, overrideClientId);
+    state.pendingAuth = this.performLogin(
+      accountId,
+      overrideAccessToken,
+      overrideClientId,
+    );
     try {
-      return await this.pendingAuth;
+      return await state.pendingAuth;
     } finally {
-      this.pendingAuth = null;
+      state.pendingAuth = null;
     }
   }
 
   /**
    * Manual reconnect flow: either an operator pasting a freshly
-   * console-generated Dhan access token (the only recovery path DhanHQ's
-   * individual-API account type supports once a token has genuinely
-   * expired — see DhanBrokerAuth's class docstring), or a per-user
-   * `BrokerAccount` being activated (which supplies its own `clientId` so
-   * the resulting session is correctly attributed instead of silently
-   * falling back to the env-configured one). Reuses the same single-flight
-   * guard as login()/refresh() so concurrent reconnect calls serialize onto
-   * one real attempt rather than each hitting Dhan independently.
+   * console-generated Dhan access token, or a per-user `BrokerAccount`
+   * being activated (which supplies its own `clientId` so the resulting
+   * session is correctly attributed instead of falling back to any
+   * env-configured one). Reuses the same per-account single-flight guard
+   * as login()/refresh().
    */
   async reconnectWithToken(
+    accountId: string,
     accessToken: string,
     clientId?: string,
   ): Promise<BrokerSession> {
-    return this.login(accessToken, clientId);
+    return this.login(accountId, accessToken, clientId);
   }
 
   /**
-   * Called once, at application bootstrap, only when the deployment's
-   * persisted trading mode is LIVE (see TradingModeService's
-   * OnApplicationBootstrap hook — BrokerSessionManager itself must not
-   * depend on TradingModeService, which would be a circular module
-   * dependency). Restores maximum freshness for whatever `onModuleInit`
-   * already loaded from encrypted storage: renews an existing session
-   * immediately (rather than waiting for the next periodic renewal), or
-   * falls back to `login()` (the DHAN_ACCESS_TOKEN bootstrap seed) only
-   * when nothing was ever persisted. Never throws — a failed bootstrap
-   * leaves the deployment in REAUTH_REQUIRED without crashing the process.
+   * Called for a specific account when its owning user is restored into
+   * LIVE mode (at process boot, for every user persisted as LIVE with a
+   * `selectedBrokerAccountId` — see `RecoveryCoordinatorService`). Renews
+   * an existing session immediately, or falls back to `login()` only when
+   * nothing was ever persisted for this account. Never throws — a failed
+   * bootstrap leaves that one account in REAUTH_REQUIRED without affecting
+   * any other account or crashing the process.
    */
-  async bootstrapLiveSession(): Promise<void> {
+  async bootstrapLiveSession(accountId: string): Promise<void> {
+    const state = this.stateFor(accountId);
     try {
-      if (this.currentSession) {
-        await this.refresh();
-      } else if (!this.reauthRequired) {
-        await this.login();
+      if (state.session) {
+        await this.refresh(accountId);
+      } else if (!state.reauthRequired) {
+        await this.login(accountId);
       }
     } catch {
       // performLogin/performRefresh already recorded REAUTH_REQUIRED and
-      // published the relevant failure event — nothing further to do here
-      // beyond ensuring the process keeps booting.
+      // published the relevant failure event for this account — nothing
+      // further to do here beyond ensuring the process keeps booting.
     }
   }
 
-  async refresh(): Promise<BrokerSession> {
-    if (this.pendingAuth) {
-      return this.pendingAuth;
+  async refresh(accountId: string): Promise<BrokerSession> {
+    const state = this.stateFor(accountId);
+    if (state.pendingAuth) {
+      return state.pendingAuth;
     }
-    if (!this.currentSession) {
-      this.reauthRequired = true;
+    if (!state.session) {
+      state.reauthRequired = true;
       throw new BrokerSessionExpiredException(
-        'No active broker session exists to refresh. Reauthentication is required.',
+        'No active broker session exists for this account to refresh. Reauthentication is required.',
       );
     }
-    this.pendingAuth = this.performRefresh(this.currentSession);
+    state.pendingAuth = this.performRefresh(accountId, state.session);
     try {
-      return await this.pendingAuth;
+      return await state.pendingAuth;
     } finally {
-      this.pendingAuth = null;
+      state.pendingAuth = null;
     }
   }
 
   private async performLogin(
+    accountId: string,
     overrideAccessToken?: string,
     overrideClientId?: string,
   ): Promise<BrokerSession> {
+    const state = this.stateFor(accountId);
     this.eventBus.publish(new BrokerLoginStartedEvent());
     try {
       const session = await this.brokerAuth.login(
         overrideAccessToken,
         overrideClientId,
       );
-      this.currentSession = session;
-      this.reauthRequired = false;
-      this.lastRefreshedAt = new Date();
-      this.lastAuthEventAt = this.lastRefreshedAt;
-      await this.tokenRepository.save(SYSTEM_USER_ID, this.brokerName, session);
+      state.session = session;
+      state.reauthRequired = false;
+      state.lastRefreshedAt = new Date();
+      state.lastAuthEventAt = state.lastRefreshedAt;
+      await this.tokenRepository.save(accountId, this.brokerName, session);
       this.eventBus.publish(new BrokerLoginSucceededEvent(session.clientCode));
       return session;
     } catch (error) {
-      this.reauthRequired = true;
-      this.lastAuthEventAt = new Date();
+      state.reauthRequired = true;
+      state.lastAuthEventAt = new Date();
       this.eventBus.publish(
         new BrokerLoginFailedEvent(this.describeError(error)),
       );
@@ -237,81 +256,82 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async performRefresh(session: BrokerSession): Promise<BrokerSession> {
+  private async performRefresh(
+    accountId: string,
+    session: BrokerSession,
+  ): Promise<BrokerSession> {
+    const state = this.stateFor(accountId);
     try {
       const refreshed = await this.brokerAuth.refresh(session);
-      this.currentSession = refreshed;
-      this.reauthRequired = false;
-      this.lastRefreshedAt = new Date();
-      this.lastAuthEventAt = this.lastRefreshedAt;
-      await this.tokenRepository.save(
-        SYSTEM_USER_ID,
-        this.brokerName,
-        refreshed,
-      );
+      state.session = refreshed;
+      state.reauthRequired = false;
+      state.lastRefreshedAt = new Date();
+      state.lastAuthEventAt = state.lastRefreshedAt;
+      await this.tokenRepository.save(accountId, this.brokerName, refreshed);
       this.eventBus.publish(
         new BrokerSessionRefreshedEvent(refreshed.clientCode),
       );
       return refreshed;
     } catch (error) {
       const clientCode = session.clientCode;
-      this.currentSession = null;
-      this.reauthRequired = true;
-      this.lastAuthEventAt = new Date();
-      await this.tokenRepository.clear(SYSTEM_USER_ID, this.brokerName);
+      state.session = null;
+      state.reauthRequired = true;
+      state.lastAuthEventAt = new Date();
+      await this.tokenRepository.clear(accountId, this.brokerName);
       this.eventBus.publish(new BrokerSessionExpiredEvent(clientCode));
       throw error;
     }
   }
 
   /**
-   * Deliberate teardown — used both for the authenticated
-   * `POST /config/broker/disconnect` endpoint and by TradingModeService's
-   * commit step when switching to PAPER. Not a failure: leaves
-   * `getAuthState()` at DISCONNECTED, never REAUTH_REQUIRED.
+   * Deliberate teardown for one account — used both by the authenticated
+   * broker-disconnect endpoint and by `TradingModeService`'s commit step
+   * when a user switches away from LIVE. Not a failure: leaves
+   * `getAuthState(accountId)` at DISCONNECTED, never REAUTH_REQUIRED.
    */
-  async logout(): Promise<void> {
-    if (!this.currentSession) {
+  async logout(accountId: string): Promise<void> {
+    const state = this.stateFor(accountId);
+    if (!state.session) {
       return;
     }
 
-    const clientCode = this.currentSession.clientCode;
-    await this.brokerAuth.logout(this.currentSession);
-    await this.tokenRepository.clear(SYSTEM_USER_ID, this.brokerName);
-    this.currentSession = null;
-    this.reauthRequired = false;
+    const clientCode = state.session.clientCode;
+    await this.brokerAuth.logout(state.session);
+    await this.tokenRepository.clear(accountId, this.brokerName);
+    state.session = null;
+    state.reauthRequired = false;
     this.eventBus.publish(new BrokerLogoutCompletedEvent(clientCode));
   }
 
-  unloadSession(): void {
-    this.currentSession = null;
+  unloadSession(accountId: string): void {
+    const state = this.states.get(accountId);
+    if (state) {
+      state.session = null;
+    }
   }
 
   /**
-   * AUTHENTICATED: a valid session exists right now.
-   * REAUTH_REQUIRED: a login/refresh attempt was made and failed — a human
-   * must supply a fresh token via the reconnect endpoint before any LIVE
-   * order can be placed.
-   * DISCONNECTED: no session exists and none was ever attempted (or one was
-   * deliberately torn down via logout()/a switch to PAPER) — the normal,
-   * non-error state for a PAPER deployment.
+   * AUTHENTICATED: a valid session exists right now for this account.
+   * REAUTH_REQUIRED: a login/refresh attempt for this account was made and
+   * failed — a human must supply a fresh token before any LIVE order for
+   * this account can be placed.
+   * DISCONNECTED: no session exists for this account and none was ever
+   * attempted (or one was deliberately torn down).
    */
-  getAuthState(): BrokerAuthState {
-    if (
-      this.currentSession &&
-      this.brokerAuth.validateSession(this.currentSession)
-    ) {
+  getAuthState(accountId: string): BrokerAuthState {
+    const state = this.states.get(accountId);
+    if (state?.session && this.brokerAuth.validateSession(state.session)) {
       return 'AUTHENTICATED';
     }
-    return this.reauthRequired ? 'REAUTH_REQUIRED' : 'DISCONNECTED';
+    return state?.reauthRequired ? 'REAUTH_REQUIRED' : 'DISCONNECTED';
   }
 
-  getLastRefreshedAt(): Date | null {
-    return this.lastRefreshedAt;
+  getLastRefreshedAt(accountId: string): Date | null {
+    return this.states.get(accountId)?.lastRefreshedAt ?? null;
   }
 
-  getLastAuthEventAt(): Date | null {
-    return this.lastAuthEventAt;
+  getLastAuthEventAt(accountId: string): Date | null {
+    return this.states.get(accountId)?.lastAuthEventAt ?? null;
   }
 
   private describeError(error: unknown): string {

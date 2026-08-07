@@ -77,10 +77,18 @@ export class BrokerAccountRepository implements IBrokerAccountRepository {
     return JSON.parse(decrypted) as BrokerAccountCredentials;
   }
 
-  async deactivateAllForUser(userId: string): Promise<void> {
-    await this.model
-      .updateMany({ userId, isActive: true }, { $set: { isActive: false } })
-      .exec();
+  async getCredentialsByAccountId(
+    accountId: string,
+  ): Promise<BrokerAccountCredentials> {
+    const doc = await this.model.findOne({ accountId }).exec();
+    if (!doc) {
+      throw new BrokerAccountNotFoundException(accountId);
+    }
+    const decrypted = decrypt(
+      doc.encryptedCredentials,
+      this.configService.tokenEncryptionKey,
+    );
+    return JSON.parse(decrypted) as BrokerAccountCredentials;
   }
 
   async markActive(userId: string, accountId: string): Promise<BrokerAccount> {

@@ -5,7 +5,7 @@ import type { ITimerScheduler } from '@shared/scheduler/timer-scheduler.interfac
 
 describe('BrokerTokenRenewalScheduler', () => {
   let sessionManager: jest.Mocked<
-    Pick<BrokerSessionManager, 'getActiveSession' | 'refresh'>
+    Pick<BrokerSessionManager, 'getAllActiveAccountIds' | 'refresh'>
   >;
   let scheduler: jest.Mocked<ITimerScheduler>;
   let tickCallback: (() => void) | undefined;
@@ -13,7 +13,7 @@ describe('BrokerTokenRenewalScheduler', () => {
 
   beforeEach(() => {
     sessionManager = {
-      getActiveSession: jest.fn().mockReturnValue({}),
+      getAllActiveAccountIds: jest.fn().mockReturnValue(['acc-1']),
       refresh: jest.fn().mockResolvedValue({}),
     };
     tickCallback = undefined;
@@ -55,16 +55,28 @@ describe('BrokerTokenRenewalScheduler', () => {
     expect(renewal.isRunning()).toBe(false);
   });
 
-  it('calls sessionManager.refresh() on each tick when a session exists', async () => {
+  it('calls sessionManager.refresh() for each active account on each tick', async () => {
     renewal.start();
     tickCallback?.();
     await Promise.resolve();
 
     expect(sessionManager.refresh).toHaveBeenCalledTimes(1);
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-1');
   });
 
-  it('skips renewal on a tick when no session exists', async () => {
-    sessionManager.getActiveSession.mockReturnValue(null);
+  it('refreshes every active account independently on each tick', async () => {
+    sessionManager.getAllActiveAccountIds.mockReturnValue(['acc-1', 'acc-2']);
+    renewal.start();
+    tickCallback?.();
+    await Promise.resolve();
+
+    expect(sessionManager.refresh).toHaveBeenCalledTimes(2);
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-1');
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-2');
+  });
+
+  it('skips renewal on a tick when no accounts are active', async () => {
+    sessionManager.getAllActiveAccountIds.mockReturnValue([]);
     renewal.start();
     tickCallback?.();
     await Promise.resolve();
@@ -72,11 +84,14 @@ describe('BrokerTokenRenewalScheduler', () => {
     expect(sessionManager.refresh).not.toHaveBeenCalled();
   });
 
-  it('never throws out of the tick even when refresh() rejects', async () => {
-    sessionManager.refresh.mockRejectedValue(new Error('renewal failed'));
+  it('never throws out of the tick even when refresh() rejects for one account', async () => {
+    sessionManager.getAllActiveAccountIds.mockReturnValue(['acc-1', 'acc-2']);
+    sessionManager.refresh.mockRejectedValueOnce(new Error('renewal failed'));
+    sessionManager.refresh.mockResolvedValueOnce({} as never);
     renewal.start();
 
     expect(() => tickCallback?.()).not.toThrow();
+    await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
   });

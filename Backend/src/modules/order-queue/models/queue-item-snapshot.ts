@@ -11,6 +11,7 @@ export interface QueueItemHistoryEntry {
 
 export interface QueueItemSnapshot {
   readonly id: string;
+  readonly userId: string;
   readonly idempotencyKey: string;
   readonly orderType: QueueItemType;
   readonly state: QueueItemState;

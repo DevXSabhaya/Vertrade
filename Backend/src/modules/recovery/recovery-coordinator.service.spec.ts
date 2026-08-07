@@ -17,6 +17,7 @@ import type { KillSwitchService } from '@modules/risk-management/kill-switch.ser
 import type { EmergencyStopService } from '@modules/risk-management/emergency-stop.service';
 import type { CooldownService } from '@modules/risk-management/cooldown.service';
 import type { DailyRiskStateService } from '@modules/risk-management/daily-risk-state.service';
+import type { IUserTradingPreferenceRepository } from '@modules/trading-mode/repository/user-trading-preference-repository.interface';
 import { RecoveryCoordinator } from './recovery-coordinator.service';
 import { RecoveryStateMachine } from './state-machine/recovery-state-machine';
 import { RecoverySnapshotService } from './recovery-snapshot.service';
@@ -53,6 +54,7 @@ function tradeSnapshot(overrides: Partial<TradeSnapshot> = {}): TradeSnapshot {
     currentStopLoss: 95,
     targets: [110, 120],
     mode: 'PAPER',
+    brokerAccountId: null,
     remainingTargets: [110, 120],
     entryOrderId: 'E-1',
     entryOrderLifecycle: null,
@@ -105,6 +107,7 @@ describe('RecoveryCoordinator', () => {
   let dailyRiskStateService: jest.Mocked<
     Pick<DailyRiskStateService, 'getState'>
   >;
+  let userTradingPreferenceRepository: jest.Mocked<IUserTradingPreferenceRepository>;
   let mongooseConnection: { readyState: number };
   let snapshotService: RecoverySnapshotService;
   let coordinator: RecoveryCoordinator;
@@ -145,6 +148,7 @@ describe('RecoveryCoordinator', () => {
       { ...DEFAULT_RECOVERY_CONFIG, ...configOverrides },
       historyRepository,
       errorRepository,
+      userTradingPreferenceRepository,
     );
   }
 
@@ -222,6 +226,11 @@ describe('RecoveryCoordinator', () => {
       getState: jest.fn().mockResolvedValue(undefined),
     };
     mongooseConnection = { readyState: CONNECTED };
+    userTradingPreferenceRepository = {
+      find: jest.fn().mockResolvedValue(null),
+      findAllLiveWithBroker: jest.fn().mockResolvedValue([]),
+      upsert: jest.fn(),
+    };
 
     coordinator = buildCoordinator();
   });
@@ -271,7 +280,7 @@ describe('RecoveryCoordinator', () => {
         idempotencyKeys: [],
         marketSubscriptions: [],
         engineStateSummary: {},
-        brokerSessionClientCode: null,
+        activeBrokerSessions: [],
         lastTick: null,
       });
 
@@ -304,7 +313,7 @@ describe('RecoveryCoordinator', () => {
         idempotencyKeys: [],
         marketSubscriptions: [],
         engineStateSummary: {},
-        brokerSessionClientCode: null,
+        activeBrokerSessions: [],
         lastTick: null,
       });
 
@@ -328,6 +337,7 @@ describe('RecoveryCoordinator', () => {
         initialStopLoss: 95,
         targets: [110, 120],
         mode: 'PAPER',
+        brokerAccountId: null,
       });
       const existingId = tradingEngineService.getAllTrades()[0].id;
       const snapshot = tradeSnapshot({
@@ -342,7 +352,7 @@ describe('RecoveryCoordinator', () => {
         idempotencyKeys: [],
         marketSubscriptions: [],
         engineStateSummary: {},
-        brokerSessionClientCode: null,
+        activeBrokerSessions: [],
         lastTick: null,
       });
 
@@ -388,7 +398,12 @@ describe('RecoveryCoordinator', () => {
 
   describe('broker unavailable', () => {
     it('retries broker authentication, then fails at RESTORE_BROKER_AUTHENTICATION', async () => {
-      brokerSessionManager.ensureSession.mockRejectedValue(
+      // RESTORE_BROKER_AUTHENTICATION is now best-effort per account —
+      // BrokerSessionManager.bootstrapLiveSession() never throws (a failed
+      // bootstrap just leaves that one account in REAUTH_REQUIRED). The
+      // step can still fail as a whole if the preference lookup itself is
+      // unavailable (e.g. the database backing it is unreachable).
+      userTradingPreferenceRepository.findAllLiveWithBroker.mockRejectedValue(
         new Error('broker unreachable'),
       );
       coordinator = buildCoordinator({ maxRetries: 1, retryBaseDelayMs: 1 });
@@ -416,9 +431,9 @@ describe('RecoveryCoordinator', () => {
 
   describe('recovery retry', () => {
     it('succeeds after a transient failure, publishing RecoveryRetryingEvent', async () => {
-      brokerSessionManager.ensureSession
+      userTradingPreferenceRepository.findAllLiveWithBroker
         .mockRejectedValueOnce(new Error('transient'))
-        .mockResolvedValue({ clientCode: 'C1' } as never);
+        .mockResolvedValue([]);
       coordinator = buildCoordinator({ maxRetries: 2, retryBaseDelayMs: 1 });
 
       const result = await runToCompletion(() => coordinator.run());

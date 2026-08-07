@@ -20,6 +20,8 @@ describe('Broker auth pipeline (e2e)', () => {
   let connection: Connection;
   let stubBrokerAuth: jest.Mocked<IBrokerAuth>;
 
+  const accountId = 'system';
+
   const fakeSession = new BrokerSession(
     'E2E_CLIENT',
     new BrokerToken('fake-access-token-value'),
@@ -54,7 +56,7 @@ describe('Broker auth pipeline (e2e)', () => {
   it('logs in without ever calling the real Dhan API', async () => {
     const sessionManager = app.get(BrokerSessionManager);
 
-    const session = await sessionManager.login();
+    const session = await sessionManager.login(accountId);
 
     expect(stubBrokerAuth.login).toHaveBeenCalledTimes(1);
     expect(session.clientCode).toBe('E2E_CLIENT');
@@ -93,11 +95,11 @@ describe('Broker auth pipeline (e2e)', () => {
   it('logs out, clears storage, and records the logout event', async () => {
     const sessionManager = app.get(BrokerSessionManager);
 
-    await sessionManager.logout();
+    await sessionManager.logout(accountId);
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(stubBrokerAuth.logout).toHaveBeenCalledTimes(1);
-    expect(sessionManager.getActiveSession()).toBeNull();
+    expect(sessionManager.getActiveSession(accountId)).toBeNull();
 
     const brokerTokens = connection.collection('brokerTokens');
     const doc = await brokerTokens.findOne({

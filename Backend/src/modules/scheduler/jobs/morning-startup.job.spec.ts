@@ -6,10 +6,23 @@ import { MorningStartupJob } from './morning-startup.job';
 import { MorningStartupCompletedEvent } from '../events/morning-startup-completed.event';
 
 describe('MorningStartupJob', () => {
-  it('logs in, refreshes instruments, starts market data, and publishes completion with verification results', async () => {
+  it('logs in every live user, refreshes instruments, starts market data, and publishes completion with verification results', async () => {
     const sessionManager = {
-      ensureSession: jest.fn().mockResolvedValue(undefined),
+      bootstrapLiveSession: jest.fn().mockResolvedValue(undefined),
+      getAllActiveAccountIds: jest.fn().mockReturnValue(['acc-1']),
       isSessionValid: jest.fn().mockReturnValue(true),
+    };
+    const userTradingPreferenceRepository = {
+      find: jest.fn(),
+      findAllLiveWithBroker: jest.fn().mockResolvedValue([
+        {
+          userId: 'user-1',
+          tradingMode: 'LIVE',
+          selectedBrokerAccountId: 'acc-1',
+          updatedAt: new Date(),
+        },
+      ]),
+      upsert: jest.fn(),
     };
     const instrumentMasterService = {
       refresh: jest.fn().mockResolvedValue(undefined),
@@ -27,6 +40,7 @@ describe('MorningStartupJob', () => {
 
     const job = new MorningStartupJob(
       sessionManager as unknown as BrokerSessionManager,
+      userTradingPreferenceRepository,
       instrumentMasterService as unknown as InstrumentMasterService,
       marketDataService as unknown as MarketDataService,
       eventBus,
@@ -34,7 +48,7 @@ describe('MorningStartupJob', () => {
 
     await job.run();
 
-    expect(sessionManager.ensureSession).toHaveBeenCalled();
+    expect(sessionManager.bootstrapLiveSession).toHaveBeenCalledWith('acc-1');
     expect(instrumentMasterService.refresh).toHaveBeenCalled();
     expect(marketDataService.start).toHaveBeenCalled();
 
@@ -47,8 +61,14 @@ describe('MorningStartupJob', () => {
 
   it('reports verification failures without throwing when REST/WS are not actually up', async () => {
     const sessionManager = {
-      ensureSession: jest.fn().mockResolvedValue(undefined),
+      bootstrapLiveSession: jest.fn().mockResolvedValue(undefined),
+      getAllActiveAccountIds: jest.fn().mockReturnValue([]),
       isSessionValid: jest.fn().mockReturnValue(false),
+    };
+    const userTradingPreferenceRepository = {
+      find: jest.fn(),
+      findAllLiveWithBroker: jest.fn().mockResolvedValue([]),
+      upsert: jest.fn(),
     };
     const instrumentMasterService = {
       refresh: jest.fn().mockResolvedValue(undefined),
@@ -66,6 +86,7 @@ describe('MorningStartupJob', () => {
 
     const job = new MorningStartupJob(
       sessionManager as unknown as BrokerSessionManager,
+      userTradingPreferenceRepository,
       instrumentMasterService as unknown as InstrumentMasterService,
       marketDataService as unknown as MarketDataService,
       eventBus,

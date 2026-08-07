@@ -8,33 +8,90 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { useToast } from '@/components/ui/Toast'
 import { useAccountSummary, useResetPaperBalance } from '@/hooks/useAccount'
-import { useSetTradingMode, useTradingMode } from '@/hooks/useTradingMode'
+import { useSelectBroker, useSetTradingMode, useTradingMode } from '@/hooks/useTradingMode'
+import { useBrokerAccounts } from '@/hooks/useBrokerAccounts'
 import { useAuth } from '@/store/auth-context'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 import { getErrorMessage } from '@/lib/error-message'
 import type { TradingMode } from '@/types/config'
+import type { BrokerAccount } from '@/types/broker'
+
+interface BrokerAccountPickerProps {
+  readonly accounts: readonly BrokerAccount[]
+  readonly selectedAccountId: string | null
+  readonly onSelect: (accountId: string) => void
+  readonly name: string
+}
+
+function BrokerAccountPicker({ accounts, selectedAccountId, onSelect, name }: BrokerAccountPickerProps) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Select broker
+      </span>
+      <div className="flex flex-col gap-2 rounded-lg border border-ink-100 p-2">
+        {accounts.map((account) => (
+          <label
+            key={account.accountId}
+            className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-ink-50"
+          >
+            <input
+              type="radio"
+              name={name}
+              checked={selectedAccountId === account.accountId}
+              onChange={() => onSelect(account.accountId)}
+              className="h-4 w-4"
+            />
+            <span className="font-medium text-ink-900">{account.displayName}</span>
+            <span className="text-xs text-ink-400">{account.brokerId}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /**
- * Lets the user switch the deployment's persisted trading mode
- * (`POST /config/trading-mode`). Every safety check — LIVE readiness,
- * broker credentials, live broker session — runs server-side in
- * `TradingModeService.setMode`; this component only surfaces the result
- * (success or the specific rejection reason), it never second-guesses or
- * retries around a failure. Switching modes only affects trades created
- * from this point on — any trade already in flight keeps the executor it
- * was pinned to at creation.
+ * Lets the user switch their own trading mode
+ * (`POST /config/trading-mode`) and, when Live, which of their own saved
+ * broker accounts executes their trades. Every safety check — broker
+ * ownership, real credential validation for the selected account — runs
+ * server-side in `TradingModeService`; this component only surfaces the
+ * result (success or the specific rejection reason). Switching modes only
+ * affects trades created from this point on — any trade already in flight
+ * keeps the executor/account it was pinned to at creation.
  */
 function TradingModeCard() {
   const tradingMode = useTradingMode()
+  const brokerAccounts = useBrokerAccounts()
   const setTradingMode = useSetTradingMode()
+  const selectBroker = useSelectBroker()
   const toast = useToast()
   const [pendingTarget, setPendingTarget] = useState<TradingMode | null>(null)
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
+  const [isChangeBrokerOpen, setIsChangeBrokerOpen] = useState(false)
+  const [changeBrokerAccountId, setChangeBrokerAccountId] = useState<string | null>(null)
+
+  const currentMode = tradingMode.data?.tradingMode
+  const accounts = brokerAccounts.data ?? []
+
+  function startSwitch(target: TradingMode) {
+    if (target === 'LIVE' && accounts.length === 0) {
+      toast.show('You need to connect a broker before enabling Live Trading.', 'error')
+      return
+    }
+    setSelectedAccountId(target === 'LIVE' ? (accounts[0]?.accountId ?? null) : null)
+    setPendingTarget(target)
+  }
 
   async function confirmSwitch() {
     const target = pendingTarget
     if (!target) return
     try {
-      await setTradingMode.mutateAsync(target)
+      await setTradingMode.mutateAsync({
+        mode: target,
+        ...(target === 'LIVE' && selectedAccountId ? { brokerAccountId: selectedAccountId } : {}),
+      })
       toast.show(
         target === 'LIVE' ? 'Switched to Live Trading.' : 'Switched to Paper Trading.',
         'success',
@@ -46,7 +103,20 @@ function TradingModeCard() {
     }
   }
 
-  const currentMode = tradingMode.data?.tradingMode
+  async function confirmChangeBroker() {
+    if (!changeBrokerAccountId) return
+    try {
+      await selectBroker.mutateAsync(changeBrokerAccountId)
+      toast.show('Live broker updated.', 'success')
+      setIsChangeBrokerOpen(false)
+    } catch (error) {
+      toast.show(getErrorMessage(error, 'Could not change broker.'), 'error')
+    }
+  }
+
+  const selectedAccount = accounts.find(
+    (account) => account.accountId === tradingMode.data?.selectedBrokerAccountId,
+  )
 
   return (
     <Card>
@@ -56,15 +126,15 @@ function TradingModeCard() {
       ) : (
         <>
           <p className="mt-2 text-xs text-ink-500">
-            Controls which executor every new trade in this deployment uses. Paper trading never
-            places real broker orders; Live trading requires a valid broker connection.
+            Controls which executor your new trades use. Paper trading never places real broker
+            orders; Live trading requires a valid connected broker account of your own.
           </p>
           <div className="mt-4 flex gap-2">
             <Button
               size="sm"
               variant={currentMode === 'PAPER' ? 'primary' : 'secondary'}
               disabled={currentMode === 'PAPER'}
-              onClick={() => setPendingTarget('PAPER')}
+              onClick={() => startSwitch('PAPER')}
             >
               Paper Trading
             </Button>
@@ -72,16 +142,30 @@ function TradingModeCard() {
               size="sm"
               variant={currentMode === 'LIVE' ? 'primary' : 'secondary'}
               disabled={currentMode === 'LIVE'}
-              onClick={() => setPendingTarget('LIVE')}
+              onClick={() => startSwitch('LIVE')}
             >
               Live Trading
             </Button>
           </div>
-          {tradingMode.data.defaultTradingMode !== currentMode && (
-            <p className="mt-3 text-xs text-ink-400">
-              Deployment default is {tradingMode.data.defaultTradingMode === 'LIVE' ? 'Live' : 'Paper'}
-              ; this override is active until changed again.
-            </p>
+          {currentMode === 'LIVE' && tradingMode.data.selectedBrokerAccountId && (
+            <div className="mt-3 flex items-center justify-between border-t border-ink-100 pt-3 text-xs">
+              <span className="text-ink-500">
+                Trading through{' '}
+                <span className="font-medium text-ink-900">
+                  {selectedAccount?.displayName ?? 'your selected broker'}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="font-medium text-brand-600 hover:text-brand-700"
+                onClick={() => {
+                  setChangeBrokerAccountId(tradingMode.data?.selectedBrokerAccountId ?? null)
+                  setIsChangeBrokerOpen(true)
+                }}
+              >
+                Change broker
+              </button>
+            </div>
           )}
         </>
       )}
@@ -98,6 +182,7 @@ function TradingModeCard() {
             <Button
               variant={pendingTarget === 'LIVE' ? 'danger' : 'primary'}
               isLoading={setTradingMode.isPending}
+              disabled={pendingTarget === 'LIVE' && !selectedAccountId}
               onClick={() => void confirmSwitch()}
             >
               Confirm
@@ -106,17 +191,59 @@ function TradingModeCard() {
         }
       >
         {pendingTarget === 'LIVE' ? (
-          <>
-            New trades will place real orders through your connected broker using real money. The
-            switch will be rejected if broker credentials aren&apos;t configured or a live broker
-            session can&apos;t be established.
-          </>
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-ink-500">
+              New trades will place real orders through your selected broker using real money. The
+              switch will be rejected if the selected account&apos;s credentials aren&apos;t valid
+              right now.
+            </p>
+            <BrokerAccountPicker
+              accounts={accounts}
+              selectedAccountId={selectedAccountId}
+              onSelect={setSelectedAccountId}
+              name="live-broker-account"
+            />
+          </div>
         ) : (
           <>
             New trades will run in the paper sandbox and never reach a real broker. Any trade
             already in progress is unaffected.
           </>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={isChangeBrokerOpen}
+        onClose={() => setIsChangeBrokerOpen(false)}
+        title="Change Live Broker"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setIsChangeBrokerOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              isLoading={selectBroker.isPending}
+              disabled={!changeBrokerAccountId}
+              onClick={() => void confirmChangeBroker()}
+            >
+              Confirm
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-ink-500">
+            Every account stays connected — only the account your new trades execute through
+            changes.
+          </p>
+          <BrokerAccountPicker
+            accounts={accounts}
+            selectedAccountId={changeBrokerAccountId}
+            onSelect={setChangeBrokerAccountId}
+            name="change-broker-account"
+          />
+        </div>
       </Modal>
     </Card>
   )

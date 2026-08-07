@@ -13,6 +13,8 @@ import type { OrderResponse } from '../models/order-response.model';
  */
 export interface OrderExecutorContractContext {
   executor: IOrderExecutor;
+  /** The account id every contract-test call routes through — `null` for PaperExecutor (no broker account), a fake id for DhanExecutor. */
+  accountId: string | null;
   /** Produces an order that ends up FILLED (or PARTIALLY_FILLED) immediately after placement. */
   placeFillableOrder(): Promise<OrderResponse>;
   /** Produces an order that remains OPEN (not yet filled) after placement. */
@@ -53,7 +55,10 @@ export function describeOrderExecutorContract(
 
     it('reflects the placed order via getOrderStatus using the same broker order id', async () => {
       const placed = await ctx.placeFillableOrder();
-      const fetched = await ctx.executor.getOrderStatus(placed.brokerOrderId);
+      const fetched = await ctx.executor.getOrderStatus(
+        placed.brokerOrderId,
+        ctx.accountId,
+      );
       expect(fetched.brokerOrderId).toBe(placed.brokerOrderId);
       expect(fetched.status).toBe(placed.status);
     });
@@ -68,21 +73,25 @@ export function describeOrderExecutorContract(
       const modified = await ctx.executor.modifyOrder(
         opened.brokerOrderId,
         new OrderModification(5),
+        ctx.accountId,
       );
       expect(modified.brokerOrderId).toBe(opened.brokerOrderId);
     });
 
     it('cancels an open order, and getOrderStatus reflects CANCELLED afterward', async () => {
       const opened = await ctx.placeOpenOrder();
-      await ctx.executor.cancelOrder(opened.brokerOrderId);
-      const fetched = await ctx.executor.getOrderStatus(opened.brokerOrderId);
+      await ctx.executor.cancelOrder(opened.brokerOrderId, ctx.accountId);
+      const fetched = await ctx.executor.getOrderStatus(
+        opened.brokerOrderId,
+        ctx.accountId,
+      );
       expect(fetched.status).toBe(OrderStatus.CANCELLED);
     });
 
     it('rejects cancelling an order that is already filled', async () => {
       const filled = await ctx.placeFillableOrder();
       await expect(
-        ctx.executor.cancelOrder(filled.brokerOrderId),
+        ctx.executor.cancelOrder(filled.brokerOrderId, ctx.accountId),
       ).rejects.toThrow();
     });
 
@@ -91,6 +100,7 @@ export function describeOrderExecutorContract(
       const exited = await ctx.executor.exitPosition(
         filled.brokerOrderId,
         new ExitRequest(filled.filledQuantity),
+        ctx.accountId,
       );
 
       expect(exited.brokerOrderId).not.toBe(filled.brokerOrderId);
@@ -98,25 +108,30 @@ export function describeOrderExecutorContract(
 
       const originalAfterExit = await ctx.executor.getOrderStatus(
         filled.brokerOrderId,
+        ctx.accountId,
       );
       expect(originalAfterExit.status).toBe(OrderStatus.EXITED);
     });
 
     it('throws when getting the status of an unknown order id', async () => {
       await expect(
-        ctx.executor.getOrderStatus('DOES-NOT-EXIST'),
+        ctx.executor.getOrderStatus('DOES-NOT-EXIST', ctx.accountId),
       ).rejects.toThrow();
     });
 
     it('throws when modifying an unknown order id', async () => {
       await expect(
-        ctx.executor.modifyOrder('DOES-NOT-EXIST', new OrderModification(1)),
+        ctx.executor.modifyOrder(
+          'DOES-NOT-EXIST',
+          new OrderModification(1),
+          ctx.accountId,
+        ),
       ).rejects.toThrow();
     });
 
     it('throws when cancelling an unknown order id', async () => {
       await expect(
-        ctx.executor.cancelOrder('DOES-NOT-EXIST'),
+        ctx.executor.cancelOrder('DOES-NOT-EXIST', ctx.accountId),
       ).rejects.toThrow();
     });
   });

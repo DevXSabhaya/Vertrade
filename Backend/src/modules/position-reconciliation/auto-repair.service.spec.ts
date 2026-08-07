@@ -152,6 +152,7 @@ describe('AutoRepairService', () => {
         initialStopLoss: 95,
         targets: [110],
         mode: 'PAPER',
+        brokerAccountId: null,
       });
       await engineWithControlledExecutor.handleMarketPriceUpdate(
         pending.instrumentToken,
@@ -184,6 +185,7 @@ describe('AutoRepairService', () => {
         tradeState: TradeState.ENTRY_PENDING,
         entryOrderId: 'BROKER-1',
         exitOrderId: null,
+        brokerAccountId: null,
       };
       const broker: BrokerPositionView = {
         tradeId: pending.id,
@@ -231,6 +233,7 @@ describe('AutoRepairService', () => {
         tradeState: TradeState.ENTRY_PENDING,
         entryOrderId: 'BROKER-X',
         exitOrderId: null,
+        brokerAccountId: null,
       };
       const broker: BrokerPositionView = {
         tradeId: 'unknown-trade',
@@ -271,6 +274,7 @@ describe('AutoRepairService', () => {
         tradeState: TradeState.WAITING_ENTRY,
         entryOrderId: null,
         exitOrderId: null,
+        brokerAccountId: null,
       };
       const broker: BrokerPositionView = {
         tradeId: 't1',

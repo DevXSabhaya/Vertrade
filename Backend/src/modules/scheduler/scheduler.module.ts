@@ -4,6 +4,7 @@ import { ConfigModule } from '@core/config/config.module';
 import { ConfigService } from '@core/config/config.service';
 import { FeatureFlagsModule } from '@core/feature-flags/feature-flags.module';
 import { BrokerAuthModule } from '@modules/broker/broker-auth/broker-auth.module';
+import { TradingModeModule } from '@modules/trading-mode/trading-mode.module';
 import { InstrumentMasterModule } from '@modules/instrument-master/instrument-master.module';
 import { MarketDataModule } from '@modules/market-data/market-data.module';
 import { OrderQueueModule } from '@modules/order-queue/order-queue.module';
@@ -59,6 +60,7 @@ const JOB_PROVIDERS = [
     ConfigModule,
     FeatureFlagsModule,
     BrokerAuthModule,
+    TradingModeModule,
     InstrumentMasterModule,
     MarketDataModule,
     OrderQueueModule,

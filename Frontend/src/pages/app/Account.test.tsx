@@ -5,9 +5,12 @@ import { renderWithProviders } from '@/test/test-utils'
 import Account from './Account'
 import { accountService } from '@/services/account.service'
 import { configService } from '@/services/config.service'
+import { brokerService } from '@/services/broker.service'
+import type { BrokerAccount } from '@/types/broker'
 
 vi.mock('@/services/account.service')
 vi.mock('@/services/config.service')
+vi.mock('@/services/broker.service')
 
 function accountSummary() {
   return {
@@ -25,13 +28,30 @@ function accountSummary() {
   }
 }
 
+function brokerAccount(overrides: Partial<BrokerAccount> = {}): BrokerAccount {
+  return {
+    accountId: 'acc-1',
+    userId: 'u1',
+    brokerId: 'DHAN',
+    displayName: 'My Dhan',
+    isActive: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    lastConnectedAt: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+    runtimeStatus: 'CONNECTED',
+    ...overrides,
+  }
+}
+
 describe('Account page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(configService.tradingMode).mockResolvedValue({
       tradingMode: 'PAPER',
-      defaultTradingMode: 'PAPER',
+      selectedBrokerAccountId: null,
     })
+    vi.mocked(brokerService.listAccounts).mockResolvedValue([])
   })
 
   it('requires confirmation before resetting the paper balance', async () => {
@@ -104,28 +124,49 @@ describe('Account page', () => {
       expect(liveButton).not.toBeDisabled()
     })
 
-    it('requires confirmation before switching to Live, and calls the backend on confirm', async () => {
+    it('blocks switching to Live with no connected broker, without opening the confirm dialog', async () => {
       vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
+      vi.mocked(brokerService.listAccounts).mockResolvedValue([])
+      const user = userEvent.setup()
+      renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
+
+      await user.click(await screen.findByRole('button', { name: 'Live Trading' }))
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(
+        await screen.findByText('You need to connect a broker before enabling Live Trading.'),
+      ).toBeInTheDocument()
+      expect(configService.setTradingMode).not.toHaveBeenCalled()
+    })
+
+    it('requires selecting a broker before switching to Live, and calls the backend with the selected account', async () => {
+      vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
+      vi.mocked(brokerService.listAccounts).mockResolvedValue([brokerAccount()])
       vi.mocked(configService.setTradingMode).mockResolvedValue({
         tradingMode: 'LIVE',
-        defaultTradingMode: 'PAPER',
+        selectedBrokerAccountId: 'acc-1',
       })
       const user = userEvent.setup()
       renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
 
       await user.click(await screen.findByRole('button', { name: 'Live Trading' }))
       expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(await screen.findByText('My Dhan')).toBeInTheDocument()
       expect(configService.setTradingMode).not.toHaveBeenCalled()
 
       await user.click(screen.getByRole('button', { name: 'Confirm' }))
 
       await vi.waitFor(() => {
-        expect(configService.setTradingMode).toHaveBeenCalledWith({ mode: 'LIVE' })
+        expect(configService.setTradingMode).toHaveBeenCalledWith({
+          mode: 'LIVE',
+          brokerAccountId: 'acc-1',
+        })
       })
     })
 
     it('cancelling the confirmation never calls the backend', async () => {
       vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
+      vi.mocked(brokerService.listAccounts).mockResolvedValue([brokerAccount()])
       const user = userEvent.setup()
       renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
 
@@ -137,8 +178,9 @@ describe('Account page', () => {
 
     it('surfaces the backend safety rejection and leaves the mode unchanged (no silent fallback)', async () => {
       vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
+      vi.mocked(brokerService.listAccounts).mockResolvedValue([brokerAccount()])
       vi.mocked(configService.setTradingMode).mockRejectedValue(
-        new Error('Cannot switch to LIVE mode: no Dhan broker credentials are configured.'),
+        new Error('Cannot switch to LIVE mode: broker authentication failed.'),
       )
       const user = userEvent.setup()
       renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
@@ -147,10 +189,23 @@ describe('Account page', () => {
       await user.click(screen.getByRole('button', { name: 'Confirm' }))
 
       expect(
-        await screen.findByText(/no Dhan broker credentials are configured/),
+        await screen.findByText(/Cannot switch to LIVE mode: broker authentication failed/),
       ).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Paper Trading' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Live Trading' })).not.toBeDisabled()
+    })
+
+    it('offers a "Change broker" affordance while Live with an active account', async () => {
+      vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
+      vi.mocked(brokerService.listAccounts).mockResolvedValue([brokerAccount()])
+      vi.mocked(configService.tradingMode).mockResolvedValue({
+        tradingMode: 'LIVE',
+        selectedBrokerAccountId: 'acc-1',
+      })
+      renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
+
+      expect(await screen.findByText('My Dhan')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Change broker' })).toBeInTheDocument()
     })
   })
 })

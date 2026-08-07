@@ -1,62 +1,75 @@
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import type { ConfigService } from '@core/config/config.service';
-import type { SettingsService } from '@modules/settings/settings.service';
 import type { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
-import type { BrokerTokenRenewalScheduler } from '@modules/broker/broker-auth/broker-token-renewal.scheduler';
+import type { BrokerAccountService } from '@modules/broker/broker-account/broker-account.service';
+import type { BrokerAccount } from '@modules/broker/broker-account/models/broker-account.model';
 import { BusinessException } from '@common/exceptions/business.exception';
-import {
-  TradingModeService,
-  TRADING_MODE_SETTING_KEY,
-} from './trading-mode.service';
+import { TradingModeService } from './trading-mode.service';
 import { TradingModeChangedEvent } from './events/trading-mode-changed.event';
+import type { IUserTradingPreferenceRepository } from './repository/user-trading-preference-repository.interface';
+import type { UserTradingPreference } from './models/user-trading-preference.model';
+
+function account(overrides: Partial<BrokerAccount> = {}): BrokerAccount {
+  return {
+    accountId: 'acc-1',
+    userId: 'user-1',
+    brokerId: 'DHAN' as BrokerAccount['brokerId'],
+    displayName: 'My Dhan',
+    isActive: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastConnectedAt: null,
+    lastError: null,
+    ...overrides,
+  };
+}
 
 describe('TradingModeService', () => {
-  let settingsStore: Map<string, unknown>;
-  let settingsService: { get: jest.Mock; set: jest.Mock };
-  let configService: {
-    tradingMode: 'PAPER' | 'LIVE';
-    hasDhanCredentials: boolean;
-  };
+  let preferenceStore: Map<string, UserTradingPreference>;
+  let preferenceRepository: jest.Mocked<IUserTradingPreferenceRepository>;
+  let configService: { tradingMode: 'PAPER' | 'LIVE' };
   let brokerSessionManager: jest.Mocked<
-    Pick<
-      BrokerSessionManager,
-      | 'ensureSession'
-      | 'isSessionValid'
-      | 'logout'
-      | 'bootstrapLiveSession'
-      | 'unloadSession'
-    >
+    Pick<BrokerSessionManager, 'unloadSession'>
   >;
-  let brokerTokenRenewalScheduler: jest.Mocked<
-    Pick<BrokerTokenRenewalScheduler, 'start' | 'stop'>
+  let brokerAccountService: jest.Mocked<
+    Pick<BrokerAccountService, 'listAccounts' | 'reconnect'>
   >;
   let publishSpy: jest.Mock;
   let eventBus: IEventBus;
   let service: TradingModeService;
 
+  function setPreference(
+    userId: string,
+    preference: UserTradingPreference,
+  ): void {
+    preferenceStore.set(userId, preference);
+  }
+
   beforeEach(() => {
-    settingsStore = new Map();
-    settingsService = {
-      get: jest.fn(
-        <T>(key: string): T | undefined =>
-          settingsStore.get(key) as T | undefined,
+    preferenceStore = new Map();
+    preferenceRepository = {
+      find: jest.fn((userId: string) =>
+        Promise.resolve(preferenceStore.get(userId) ?? null),
       ),
-      set: jest.fn((key: string, value: unknown) => {
-        settingsStore.set(key, value);
-        return Promise.resolve({ key, value } as never);
+      findAllLiveWithBroker: jest.fn().mockResolvedValue([]),
+      upsert: jest.fn((userId: string, patch) => {
+        const updated: UserTradingPreference = {
+          userId,
+          tradingMode: patch.tradingMode,
+          selectedBrokerAccountId: patch.selectedBrokerAccountId,
+          updatedAt: new Date(),
+        };
+        preferenceStore.set(userId, updated);
+        return Promise.resolve(updated);
       }),
     };
-    configService = { tradingMode: 'PAPER', hasDhanCredentials: true };
+    configService = { tradingMode: 'PAPER' };
     brokerSessionManager = {
-      ensureSession: jest.fn().mockResolvedValue({}),
-      isSessionValid: jest.fn().mockReturnValue(true),
-      logout: jest.fn().mockResolvedValue(undefined),
-      bootstrapLiveSession: jest.fn().mockResolvedValue(undefined),
       unloadSession: jest.fn(),
     };
-    brokerTokenRenewalScheduler = {
-      start: jest.fn(),
-      stop: jest.fn(),
+    brokerAccountService = {
+      listAccounts: jest.fn().mockResolvedValue([account()]),
+      reconnect: jest.fn().mockResolvedValue(account({ isActive: true })),
     };
     publishSpy = jest.fn();
     eventBus = {
@@ -66,181 +79,156 @@ describe('TradingModeService', () => {
     };
 
     service = new TradingModeService(
-      settingsService as unknown as SettingsService,
+      preferenceRepository,
       configService as unknown as ConfigService,
       brokerSessionManager as unknown as BrokerSessionManager,
-      brokerTokenRenewalScheduler as unknown as BrokerTokenRenewalScheduler,
+      brokerAccountService as unknown as BrokerAccountService,
       eventBus,
     );
   });
 
   describe('getCurrentMode', () => {
-    it('falls back to the env default when no override has ever been persisted', () => {
-      expect(service.getCurrentMode()).toBe('PAPER');
+    it('falls back to the env default when no override has ever been persisted', async () => {
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('PAPER');
     });
 
-    it('returns the persisted override once one exists, ignoring the env default', () => {
-      settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
-      expect(service.getCurrentMode()).toBe('LIVE');
-    });
-  });
+    it('returns the persisted override once one exists, ignoring the env default', async () => {
+      setPreference('user-1', {
+        userId: 'user-1',
+        tradingMode: 'LIVE',
+        selectedBrokerAccountId: 'acc-1',
+        updatedAt: new Date(),
+      });
 
-  describe('onModuleInit', () => {
-    it('persists the env default exactly once when nothing has ever been persisted', async () => {
-      await service.onModuleInit();
-
-      expect(settingsService.set).toHaveBeenCalledWith(
-        TRADING_MODE_SETTING_KEY,
-        'PAPER',
-        'system:bootstrap',
-      );
-      expect(brokerSessionManager.bootstrapLiveSession).not.toHaveBeenCalled();
-      expect(brokerTokenRenewalScheduler.start).not.toHaveBeenCalled();
-    });
-
-    it('never overwrites an already-persisted override, even if the env default differs', async () => {
-      settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
-      configService.tradingMode = 'PAPER';
-
-      await service.onModuleInit();
-
-      expect(settingsService.set).not.toHaveBeenCalled();
-      expect(service.getCurrentMode()).toBe('LIVE');
-    });
-
-    it('authenticates completely and starts the renewal scheduler when restored mode is LIVE', async () => {
-      settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
-
-      await service.onModuleInit();
-
-      expect(brokerSessionManager.bootstrapLiveSession).toHaveBeenCalledTimes(
-        1,
-      );
-      expect(brokerTokenRenewalScheduler.start).toHaveBeenCalledTimes(1);
-    });
-
-    it('never throws and still starts the renewal scheduler even if bootstrapLiveSession unexpectedly rejects (defense-in-depth on top of BrokerSessionManager already swallowing its own failures)', async () => {
-      settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
-      brokerSessionManager.bootstrapLiveSession.mockRejectedValue(
-        new Error('unexpected'),
-      );
-
-      await expect(service.onModuleInit()).resolves.toBeUndefined();
-      expect(brokerTokenRenewalScheduler.start).toHaveBeenCalledTimes(1);
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('LIVE');
     });
   });
 
   describe('setMode', () => {
-    it('switches to PAPER, tearing down the broker session and stopping the renewal scheduler', async () => {
-      settingsStore.set(TRADING_MODE_SETTING_KEY, 'LIVE');
-      await service.setMode('PAPER', 'user-1');
+    it('switches to PAPER, tearing down the broker session for the previously selected account', async () => {
+      setPreference('user-1', {
+        userId: 'user-1',
+        tradingMode: 'LIVE',
+        selectedBrokerAccountId: 'acc-1',
+        updatedAt: new Date(),
+      });
 
-      expect(service.getCurrentMode()).toBe('PAPER');
-      expect(brokerSessionManager.ensureSession).not.toHaveBeenCalled();
-      expect(brokerSessionManager.unloadSession).toHaveBeenCalledTimes(1);
-      expect(brokerTokenRenewalScheduler.stop).toHaveBeenCalledTimes(1);
+      await service.setMode('user-1', 'PAPER', 'user-1');
+
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('PAPER');
+      expect(brokerSessionManager.unloadSession).toHaveBeenCalledWith('acc-1');
+      expect(preferenceRepository.upsert).toHaveBeenCalledWith('user-1', {
+        tradingMode: 'PAPER',
+        selectedBrokerAccountId: null,
+      });
     });
 
     it('is a no-op (never re-validates or re-publishes) when already in the requested mode', async () => {
-      await service.setMode('PAPER', 'user-1');
+      await service.setMode('user-1', 'PAPER', 'user-1');
       expect(publishSpy).not.toHaveBeenCalled();
-      expect(settingsService.set).not.toHaveBeenCalled();
+      expect(preferenceRepository.upsert).not.toHaveBeenCalled();
     });
 
-    it('switches to LIVE only after confirming credentials exist and a broker session can be established, and starts the renewal scheduler', async () => {
-      await service.setMode('LIVE', 'user-1');
+    it('switches to LIVE only after confirming the selected broker account authenticates', async () => {
+      await service.setMode('user-1', 'LIVE', 'user-1', 'acc-1');
 
-      expect(brokerSessionManager.ensureSession).toHaveBeenCalledTimes(1);
-      expect(service.getCurrentMode()).toBe('LIVE');
-      expect(brokerTokenRenewalScheduler.start).toHaveBeenCalledTimes(1);
+      expect(brokerAccountService.reconnect).toHaveBeenCalledWith(
+        'user-1',
+        'acc-1',
+      );
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('LIVE');
       expect(publishSpy).toHaveBeenCalledWith(
         expect.any(TradingModeChangedEvent),
       );
     });
 
-    it('refuses to switch to LIVE when no broker credentials are configured — never silently proceeds', async () => {
-      configService.hasDhanCredentials = false;
+    it('refuses to switch to LIVE when the user owns no broker accounts — never silently proceeds', async () => {
+      brokerAccountService.listAccounts.mockResolvedValue([]);
 
-      await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow(
-        BusinessException,
-      );
-      expect(brokerSessionManager.ensureSession).not.toHaveBeenCalled();
-      expect(service.getCurrentMode()).toBe('PAPER');
-      expect(settingsService.set).not.toHaveBeenCalled();
+      await expect(
+        service.setMode('user-1', 'LIVE', 'user-1', 'acc-1'),
+      ).rejects.toThrow(BusinessException);
+      expect(brokerAccountService.reconnect).not.toHaveBeenCalled();
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('PAPER');
+      expect(preferenceRepository.upsert).not.toHaveBeenCalled();
     });
 
-    it('refuses to switch to LIVE when the broker session cannot be established — mode stays unchanged, no fallback', async () => {
-      brokerSessionManager.ensureSession.mockRejectedValue(
+    it('refuses to switch to LIVE when the broker account cannot authenticate — mode stays unchanged, no fallback', async () => {
+      brokerAccountService.reconnect.mockRejectedValue(
         new Error('invalid credentials'),
       );
 
-      await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow(
-        BusinessException,
-      );
-      expect(service.getCurrentMode()).toBe('PAPER');
-      expect(settingsService.set).not.toHaveBeenCalled();
+      await expect(
+        service.setMode('user-1', 'LIVE', 'user-1', 'acc-1'),
+      ).rejects.toThrow(BusinessException);
+      await expect(service.getCurrentMode('user-1')).resolves.toBe('PAPER');
+      expect(preferenceRepository.upsert).not.toHaveBeenCalled();
       expect(publishSpy).not.toHaveBeenCalled();
     });
 
-    it('allows switching to LIVE when ensureSession resolves but the session is not actually valid', async () => {
-      brokerSessionManager.isSessionValid.mockReturnValue(false);
-
-      const result = await service.setMode('LIVE', 'user-1');
-      expect(result).toBe('LIVE');
-      expect(service.getCurrentMode()).toBe('LIVE');
-    });
-
-    it('persists settings before publishing the mode-changed event', async () => {
+    it('persists the preference before publishing the mode-changed event', async () => {
       const callOrder: string[] = [];
-      settingsService.set.mockImplementation((key: string, value: unknown) => {
-        settingsStore.set(key, value);
-        callOrder.push('settings');
-        return Promise.resolve({ key, value } as never);
+      preferenceRepository.upsert.mockImplementation((userId, patch) => {
+        const updated: UserTradingPreference = {
+          userId,
+          tradingMode: patch.tradingMode,
+          selectedBrokerAccountId: patch.selectedBrokerAccountId,
+          updatedAt: new Date(),
+        };
+        preferenceStore.set(userId, updated);
+        callOrder.push('preference');
+        return Promise.resolve(updated);
       });
       publishSpy.mockImplementation(() => {
         callOrder.push('event');
       });
 
-      await service.setMode('LIVE', 'user-1');
+      await service.setMode('user-1', 'LIVE', 'user-1', 'acc-1');
 
-      expect(callOrder).toEqual(['settings', 'event']);
+      expect(callOrder).toEqual(['preference', 'event']);
     });
 
     describe('single-flight / concurrency', () => {
-      it('collapses concurrent identical-target calls into exactly one real switch', async () => {
-        let resolveEnsureSession: (() => void) | undefined;
-        brokerSessionManager.ensureSession.mockReturnValue(
+      it('collapses concurrent identical-target calls for the same user into exactly one real switch', async () => {
+        let resolveReconnect: (() => void) | undefined;
+        brokerAccountService.reconnect.mockReturnValue(
           new Promise((resolve) => {
-            resolveEnsureSession = () => resolve({} as never);
+            resolveReconnect = () => resolve(account({ isActive: true }));
           }),
         );
 
         const calls = Array.from({ length: 25 }, () =>
-          service.setMode('LIVE', 'user-1'),
+          service.setMode('user-1', 'LIVE', 'user-1', 'acc-1'),
         );
-        resolveEnsureSession?.();
+        resolveReconnect?.();
         const results = await Promise.all(calls);
 
         expect(results.every((mode) => mode === 'LIVE')).toBe(true);
-        expect(brokerSessionManager.ensureSession).toHaveBeenCalledTimes(1);
-        expect(settingsService.set).toHaveBeenCalledTimes(1);
+        expect(brokerAccountService.reconnect).toHaveBeenCalledTimes(1);
+        expect(preferenceRepository.upsert).toHaveBeenCalledTimes(1);
       });
 
-      it('serializes different-target concurrent calls rather than interleaving', async () => {
-        const first = service.setMode('LIVE', 'user-1');
-        const second = service.setMode('PAPER', 'user-2');
+      it('serializes different-target concurrent calls for the same user rather than interleaving', async () => {
+        const first = service.setMode('user-1', 'LIVE', 'user-1', 'acc-1');
+        const second = service.setMode('user-1', 'PAPER', 'user-1');
 
         await Promise.all([first, second]);
 
-        expect(service.getCurrentMode()).toBe('PAPER');
+        await expect(service.getCurrentMode('user-1')).resolves.toBe('PAPER');
       });
 
       it('a failed switch does not block a subsequent differently-targeted switch from proceeding', async () => {
-        configService.hasDhanCredentials = false;
-        await expect(service.setMode('LIVE', 'user-1')).rejects.toThrow();
+        brokerAccountService.listAccounts.mockResolvedValueOnce([]);
+        await expect(
+          service.setMode('user-1', 'LIVE', 'user-1', 'acc-1'),
+        ).rejects.toThrow();
 
-        configService.hasDhanCredentials = true;
-        const result = await service.setMode('LIVE', 'user-1');
+        const result = await service.setMode(
+          'user-1',
+          'LIVE',
+          'user-1',
+          'acc-1',
+        );
 
         expect(result).toBe('LIVE');
       });
@@ -250,8 +238,8 @@ describe('TradingModeService', () => {
         for (let i = 0; i < 200; i += 1) {
           mode = mode === 'PAPER' ? 'LIVE' : 'PAPER';
 
-          await service.setMode(mode, `user-${i}`);
-          expect(service.getCurrentMode()).toBe(mode);
+          await service.setMode(`user-${i}`, mode, `user-${i}`, 'acc-1');
+          await expect(service.getCurrentMode(`user-${i}`)).resolves.toBe(mode);
         }
       });
     });

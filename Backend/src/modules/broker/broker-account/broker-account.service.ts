@@ -21,27 +21,24 @@ import { BrokerAccountRemovedEvent } from './events/broker-account-removed.event
 
 /**
  * Owns the per-user catalog of saved broker accounts and the rules around
- * activating one of them:
+ * connecting one of them:
  *  - A user can save any number of broker accounts, for any registered
  *    broker (implemented or not — an unimplemented one just can never be
  *    activated).
- *  - At most one account is ever active at a time: `activate` deactivates
- *    every other account for that user first.
- *  - `disconnect` tears down only the runtime broker session
- *    (`BrokerSessionManager.logout()`) — the saved account record, and its
- *    `isActive` flag, are untouched, so reconnecting never requires
- *    re-onboarding.
- *  - `reconnect` is a no-op once already authenticated — it only actually
- *    re-authenticates when the session has expired.
+ *  - Every account holds its **own independent** `BrokerSessionManager`
+ *    session, keyed by `accountId` — activating one account never touches
+ *    any other account's session, whether owned by the same user or a
+ *    different one. Any number of a user's accounts can be simultaneously
+ *    connected; `isActive` here means "this account currently has an
+ *    established (or last-attempted) session," not "the one used for Live
+ *    trading" — that's a separate, explicit selection owned by
+ *    `TradingModeService`/`UserTradingPreference`.
+ *  - `disconnect` tears down only that account's runtime broker session
+ *    (`BrokerSessionManager.logout(accountId)`) — the saved account record
+ *    is untouched, so reconnecting never requires re-onboarding.
+ *  - `reconnect` is a no-op once that account is already authenticated — it
+ *    only actually re-authenticates when its session has expired.
  *  - `remove` is the only operation that deletes the saved record.
- *
- * Deliberately does not generalize `BrokerSessionManager` into a
- * multi-session manager: this platform runs one broker session per process
- * (see `BrokerSessionManager`'s own docstring), so "activating" an account
- * means routing that account's stored credentials through the existing
- * single-session login flow (`reconnectWithToken`, the same manual-reconnect
- * path an operator already uses) rather than introducing N concurrent
- * broker sessions.
  */
 @Injectable()
 export class BrokerAccountService {
@@ -100,7 +97,7 @@ export class BrokerAccountService {
     if (!account.isActive) {
       return BrokerStatus.NOT_CONNECTED;
     }
-    const authState = this.brokerSessionManager.getAuthState();
+    const authState = this.brokerSessionManager.getAuthState(account.accountId);
     if (authState === 'AUTHENTICATED') {
       return BrokerStatus.CONNECTED;
     }
@@ -121,6 +118,7 @@ export class BrokerAccountService {
 
     try {
       await this.brokerSessionManager.reconnectWithToken(
+        accountId,
         credentials.accessToken,
         credentials.clientId,
       );
@@ -133,7 +131,6 @@ export class BrokerAccountService {
       throw error;
     }
 
-    await this.repository.deactivateAllForUser(userId);
     const activated = await this.repository.markActive(userId, accountId);
     this.eventBus.publish(
       new BrokerAccountActivatedEvent(userId, accountId, account.brokerId),
@@ -141,18 +138,18 @@ export class BrokerAccountService {
     return activated;
   }
 
-  /** Only actually re-authenticates when the current session has expired — a healthy session is left untouched. */
+  /** Only actually re-authenticates when this account's session has expired — a healthy session is left untouched. */
   async reconnect(userId: string, accountId: string): Promise<BrokerAccount> {
-    if (this.brokerSessionManager.getAuthState() === 'AUTHENTICATED') {
+    if (this.brokerSessionManager.getAuthState(accountId) === 'AUTHENTICATED') {
       return this.getAccount(userId, accountId);
     }
     return this.activate(userId, accountId);
   }
 
-  /** Tears down only the runtime session — the saved account record (and its isActive flag) is untouched, so reconnecting never re-triggers onboarding. */
+  /** Tears down only this account's runtime session — the saved account record (and its isActive flag) is untouched, so reconnecting never re-triggers onboarding. Other accounts' sessions (this user's or any other user's) are entirely unaffected. */
   async disconnect(userId: string, accountId: string): Promise<BrokerAccount> {
     const account = await this.getAccount(userId, accountId);
-    await this.brokerSessionManager.logout();
+    await this.brokerSessionManager.logout(accountId);
     this.eventBus.publish(
       new BrokerAccountDisconnectedEvent(userId, accountId),
     );
@@ -162,7 +159,7 @@ export class BrokerAccountService {
   async remove(userId: string, accountId: string): Promise<void> {
     const account = await this.getAccount(userId, accountId);
     if (account.isActive) {
-      await this.brokerSessionManager.logout().catch(() => undefined);
+      await this.brokerSessionManager.logout(accountId).catch(() => undefined);
     }
     await this.repository.delete(userId, accountId);
     this.eventBus.publish(new BrokerAccountRemovedEvent(userId, accountId));

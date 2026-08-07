@@ -35,6 +35,7 @@ function buildItem(
 ): QueueItem {
   return new QueueItem(
     `item-${overrides.instrumentToken ?? 'TOKEN-1'}-${clock.now().getTime()}`,
+    'user-1',
     `idem-${overrides.instrumentToken ?? 'TOKEN-1'}-${Math.random()}`,
     QueueItemType.CREATE_TRADE,
     buildRequest(),

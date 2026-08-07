@@ -79,6 +79,7 @@ describe('PositionManager', () => {
       initialStopLoss: 95,
       targets: [110, 120],
       mode: 'PAPER',
+      brokerAccountId: null,
       ...overrides,
     });
   }

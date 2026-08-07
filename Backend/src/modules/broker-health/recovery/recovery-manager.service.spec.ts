@@ -9,7 +9,7 @@ import { FakeClock } from '../testing/fake-clock';
 describe('RecoveryManagerService', () => {
   let marketDataService: jest.Mocked<Pick<MarketDataService, 'start' | 'stop'>>;
   let sessionManager: jest.Mocked<
-    Pick<BrokerSessionManager, 'refresh' | 'login'>
+    Pick<BrokerSessionManager, 'refresh' | 'getAllActiveAccountIds'>
   >;
   let instrumentMasterService: jest.Mocked<
     Pick<InstrumentMasterService, 'refresh'>
@@ -25,7 +25,7 @@ describe('RecoveryManagerService', () => {
     };
     sessionManager = {
       refresh: jest.fn().mockResolvedValue(undefined),
-      login: jest.fn().mockResolvedValue(undefined),
+      getAllActiveAccountIds: jest.fn().mockReturnValue(['acc-1']),
     };
     instrumentMasterService = {
       refresh: jest.fn().mockResolvedValue(undefined),
@@ -45,21 +45,37 @@ describe('RecoveryManagerService', () => {
     );
   });
 
-  it('reconnects market data, refreshes the session, and reloads the instrument cache, in order', async () => {
+  it('reconnects market data, refreshes every active account session, and reloads the instrument cache, in order', async () => {
     await manager.recover('test reason');
 
     expect(marketDataService.stop).toHaveBeenCalled();
     expect(marketDataService.start).toHaveBeenCalled();
-    expect(sessionManager.refresh).toHaveBeenCalled();
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-1');
     expect(instrumentMasterService.refresh).toHaveBeenCalled();
   });
 
-  it('falls back to login() when refresh() fails', async () => {
-    sessionManager.refresh.mockRejectedValueOnce(new Error('refresh failed'));
+  it('refreshes every active account independently — one account failing to refresh never blocks another or the rest of recovery', async () => {
+    sessionManager.getAllActiveAccountIds.mockReturnValue(['acc-1', 'acc-2']);
+    sessionManager.refresh.mockImplementation((accountId: string) =>
+      accountId === 'acc-1'
+        ? Promise.reject(new Error('refresh failed'))
+        : Promise.resolve({} as Awaited<ReturnType<BrokerSessionManager['refresh']>>),
+    );
 
     await manager.recover('test reason');
 
-    expect(sessionManager.login).toHaveBeenCalled();
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-1');
+    expect(sessionManager.refresh).toHaveBeenCalledWith('acc-2');
+    expect(instrumentMasterService.refresh).toHaveBeenCalled();
+  });
+
+  it('does nothing session-related when there are no active accounts', async () => {
+    sessionManager.getAllActiveAccountIds.mockReturnValue([]);
+
+    await manager.recover('test reason');
+
+    expect(sessionManager.refresh).not.toHaveBeenCalled();
+    expect(instrumentMasterService.refresh).toHaveBeenCalled();
   });
 
   it('records a successful attempt in recovery history', async () => {

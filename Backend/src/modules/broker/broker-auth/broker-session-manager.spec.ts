@@ -23,6 +23,7 @@ function createSession(expiresInMs = 60_000): BrokerSession {
 }
 
 describe('BrokerSessionManager', () => {
+  const accountId = 'acc-1';
   let brokerAuth: jest.Mocked<IBrokerAuth>;
   let tokenRepository: jest.Mocked<IBrokerTokenRepository>;
   let eventBus: jest.Mocked<IEventBus>;
@@ -49,15 +50,15 @@ describe('BrokerSessionManager', () => {
     );
   });
 
-  describe('onModuleInit', () => {
+  describe('restoreSession', () => {
     it('restores a persisted session that is still valid', async () => {
       const stored = createSession();
       tokenRepository.find.mockResolvedValue(stored);
       brokerAuth.validateSession.mockReturnValue(true);
 
-      await manager.onModuleInit();
+      await manager.restoreSession(accountId);
 
-      expect(manager.getActiveSession()).toBe(stored);
+      expect(manager.getActiveSession(accountId)).toBe(stored);
     });
 
     it('does not restore a persisted session that is already expired', async () => {
@@ -65,15 +66,15 @@ describe('BrokerSessionManager', () => {
       tokenRepository.find.mockResolvedValue(stored);
       brokerAuth.validateSession.mockReturnValue(false);
 
-      await manager.onModuleInit();
+      await manager.restoreSession(accountId);
 
-      expect(manager.getActiveSession()).toBeNull();
+      expect(manager.getActiveSession(accountId)).toBeNull();
     });
 
     it('leaves the session null when nothing is persisted', async () => {
       tokenRepository.find.mockResolvedValue(null);
-      await manager.onModuleInit();
-      expect(manager.getActiveSession()).toBeNull();
+      await manager.restoreSession(accountId);
+      expect(manager.getActiveSession(accountId)).toBeNull();
     });
   });
 
@@ -82,12 +83,12 @@ describe('BrokerSessionManager', () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
 
-      const result = await manager.login();
+      const result = await manager.login(accountId);
 
       expect(result).toBe(session);
-      expect(manager.getActiveSession()).toBe(session);
+      expect(manager.getActiveSession(accountId)).toBe(session);
       expect(tokenRepository.save).toHaveBeenCalledWith(
-        'system',
+        accountId,
         'dhan',
         session,
       );
@@ -105,7 +106,7 @@ describe('BrokerSessionManager', () => {
       const error = new Error('invalid credentials');
       brokerAuth.login.mockRejectedValue(error);
 
-      await expect(manager.login()).rejects.toThrow(error);
+      await expect(manager.login(accountId)).rejects.toThrow(error);
 
       expect(eventBus.publish).toHaveBeenNthCalledWith(
         1,
@@ -115,13 +116,13 @@ describe('BrokerSessionManager', () => {
         2,
         expect.any(BrokerLoginFailedEvent),
       );
-      expect(manager.getActiveSession()).toBeNull();
+      expect(manager.getActiveSession(accountId)).toBeNull();
     });
   });
 
   describe('refresh', () => {
     it('throws BrokerSessionExpiredException when there is no current session', async () => {
-      await expect(manager.refresh()).rejects.toThrow(
+      await expect(manager.refresh(accountId)).rejects.toThrow(
         BrokerSessionExpiredException,
       );
       expect(brokerAuth.refresh).not.toHaveBeenCalled();
@@ -130,18 +131,18 @@ describe('BrokerSessionManager', () => {
     it('replaces the session, persists it, and publishes SessionRefreshed on success', async () => {
       const initial = createSession();
       brokerAuth.login.mockResolvedValue(initial);
-      await manager.login();
+      await manager.login(accountId);
       eventBus.publish.mockClear();
 
       const refreshed = createSession();
       brokerAuth.refresh.mockResolvedValue(refreshed);
 
-      const result = await manager.refresh();
+      const result = await manager.refresh(accountId);
 
       expect(result).toBe(refreshed);
-      expect(manager.getActiveSession()).toBe(refreshed);
+      expect(manager.getActiveSession(accountId)).toBe(refreshed);
       expect(tokenRepository.save).toHaveBeenCalledWith(
-        'system',
+        accountId,
         'dhan',
         refreshed,
       );
@@ -153,15 +154,17 @@ describe('BrokerSessionManager', () => {
     it('clears the session and publishes SessionExpired when refresh fails', async () => {
       const initial = createSession();
       brokerAuth.login.mockResolvedValue(initial);
-      await manager.login();
+      await manager.login(accountId);
       eventBus.publish.mockClear();
 
       brokerAuth.refresh.mockRejectedValue(new Error('refresh token expired'));
 
-      await expect(manager.refresh()).rejects.toThrow('refresh token expired');
+      await expect(manager.refresh(accountId)).rejects.toThrow(
+        'refresh token expired',
+      );
 
-      expect(manager.getActiveSession()).toBeNull();
-      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'dhan');
+      expect(manager.getActiveSession(accountId)).toBeNull();
+      expect(tokenRepository.clear).toHaveBeenCalledWith(accountId, 'dhan');
       expect(eventBus.publish).toHaveBeenCalledWith(
         expect.any(BrokerSessionExpiredEvent),
       );
@@ -170,20 +173,20 @@ describe('BrokerSessionManager', () => {
 
   describe('logout', () => {
     it('does nothing when there is no active session', async () => {
-      await manager.logout();
+      await manager.logout(accountId);
       expect(brokerAuth.logout).not.toHaveBeenCalled();
     });
 
     it('logs out, clears storage, clears the session, and publishes LogoutCompleted', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
-      await manager.login();
+      await manager.login(accountId);
 
-      await manager.logout();
+      await manager.logout(accountId);
 
       expect(brokerAuth.logout).toHaveBeenCalledWith(session);
-      expect(tokenRepository.clear).toHaveBeenCalledWith('system', 'dhan');
-      expect(manager.getActiveSession()).toBeNull();
+      expect(tokenRepository.clear).toHaveBeenCalledWith(accountId, 'dhan');
+      expect(manager.getActiveSession(accountId)).toBeNull();
       expect(eventBus.publish).toHaveBeenCalledWith(
         expect.any(BrokerLogoutCompletedEvent),
       );
@@ -194,10 +197,10 @@ describe('BrokerSessionManager', () => {
     it('returns the current session without calling the broker when still valid', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
-      await manager.login();
+      await manager.login(accountId);
       brokerAuth.validateSession.mockReturnValue(true);
 
-      const result = await manager.ensureSession();
+      const result = await manager.ensureSession(accountId);
 
       expect(result).toBe(session);
       expect(brokerAuth.refresh).not.toHaveBeenCalled();
@@ -206,10 +209,11 @@ describe('BrokerSessionManager', () => {
     it('throws BrokerSessionExpiredException when the current session has expired', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
-      await manager.login();
+      await manager.login(accountId);
       brokerAuth.validateSession.mockReturnValue(false);
+      tokenRepository.find.mockResolvedValue(null);
 
-      await expect(manager.ensureSession()).rejects.toThrow(
+      await expect(manager.ensureSession(accountId)).rejects.toThrow(
         BrokerSessionExpiredException,
       );
     });
@@ -217,7 +221,7 @@ describe('BrokerSessionManager', () => {
     it('shares a single in-flight refresh across concurrent callers instead of calling the broker twice', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
-      await manager.login();
+      await manager.login(accountId);
       brokerAuth.validateSession.mockReturnValue(true);
 
       let resolveRefresh: ((session: BrokerSession) => void) | undefined;
@@ -227,8 +231,8 @@ describe('BrokerSessionManager', () => {
         }),
       );
 
-      const first = manager.refresh();
-      const second = manager.refresh();
+      const first = manager.refresh(accountId);
+      const second = manager.refresh(accountId);
 
       const refreshed = createSession();
       resolveRefresh?.(refreshed);
@@ -247,8 +251,8 @@ describe('BrokerSessionManager', () => {
         }),
       );
 
-      const first = manager.login();
-      const second = manager.login();
+      const first = manager.login(accountId);
+      const second = manager.login(accountId);
 
       const session = createSession();
       resolveLogin?.(session);
@@ -260,7 +264,8 @@ describe('BrokerSessionManager', () => {
     });
 
     it('throws BrokerSessionExpiredException when there is no current session at all', async () => {
-      await expect(manager.ensureSession()).rejects.toThrow(
+      tokenRepository.find.mockResolvedValue(null);
+      await expect(manager.ensureSession(accountId)).rejects.toThrow(
         BrokerSessionExpiredException,
       );
     });
@@ -268,45 +273,45 @@ describe('BrokerSessionManager', () => {
 
   describe('getAuthState', () => {
     it('is DISCONNECTED before anything has ever been attempted', () => {
-      expect(manager.getAuthState()).toBe('DISCONNECTED');
+      expect(manager.getAuthState(accountId)).toBe('DISCONNECTED');
     });
 
     it('is AUTHENTICATED once a valid session exists', async () => {
       brokerAuth.login.mockResolvedValue(createSession());
       brokerAuth.validateSession.mockReturnValue(true);
-      await manager.login();
+      await manager.login(accountId);
 
-      expect(manager.getAuthState()).toBe('AUTHENTICATED');
+      expect(manager.getAuthState(accountId)).toBe('AUTHENTICATED');
     });
 
     it('is REAUTH_REQUIRED after a login failure, not DISCONNECTED', async () => {
       brokerAuth.login.mockRejectedValue(new Error('invalid token'));
-      await expect(manager.login()).rejects.toThrow();
+      await expect(manager.login(accountId)).rejects.toThrow();
 
-      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+      expect(manager.getAuthState(accountId)).toBe('REAUTH_REQUIRED');
     });
 
     it('is REAUTH_REQUIRED after a refresh failure', async () => {
       brokerAuth.login.mockResolvedValue(createSession());
-      await manager.login();
+      await manager.login(accountId);
       brokerAuth.refresh.mockRejectedValue(new Error('renew failed'));
 
-      await expect(manager.refresh()).rejects.toThrow();
-      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+      await expect(manager.refresh(accountId)).rejects.toThrow();
+      expect(manager.getAuthState(accountId)).toBe('REAUTH_REQUIRED');
     });
 
     it('returns to DISCONNECTED (not REAUTH_REQUIRED) after a deliberate logout following a prior failure', async () => {
       brokerAuth.login.mockResolvedValueOnce(createSession());
-      await manager.login();
+      await manager.login(accountId);
       brokerAuth.refresh.mockRejectedValue(new Error('renew failed'));
-      await expect(manager.refresh()).rejects.toThrow();
-      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+      await expect(manager.refresh(accountId)).rejects.toThrow();
+      expect(manager.getAuthState(accountId)).toBe('REAUTH_REQUIRED');
 
       brokerAuth.login.mockResolvedValueOnce(createSession());
-      await manager.login();
-      await manager.logout();
+      await manager.login(accountId);
+      await manager.logout(accountId);
 
-      expect(manager.getAuthState()).toBe('DISCONNECTED');
+      expect(manager.getAuthState(accountId)).toBe('DISCONNECTED');
     });
   });
 
@@ -315,18 +320,22 @@ describe('BrokerSessionManager', () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
 
-      const result = await manager.reconnectWithToken('fresh-token');
+      const result = await manager.reconnectWithToken(accountId, 'fresh-token');
 
       expect(result).toBe(session);
       expect(brokerAuth.login).toHaveBeenCalledWith('fresh-token', undefined);
-      expect(manager.getAuthState()).toBe('DISCONNECTED');
+      expect(manager.getAuthState(accountId)).toBe('DISCONNECTED');
     });
 
     it('forwards the supplied clientId alongside the override token', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
 
-      await manager.reconnectWithToken('fresh-token', 'USER-OWNED-ID');
+      await manager.reconnectWithToken(
+        accountId,
+        'fresh-token',
+        'USER-OWNED-ID',
+      );
 
       expect(brokerAuth.login).toHaveBeenCalledWith(
         'fresh-token',
@@ -338,65 +347,86 @@ describe('BrokerSessionManager', () => {
   describe('bootstrapLiveSession', () => {
     it('refreshes an already-restored session rather than logging in again', async () => {
       brokerAuth.login.mockResolvedValue(createSession());
-      await manager.login();
+      await manager.login(accountId);
       const refreshed = createSession();
       brokerAuth.refresh.mockResolvedValue(refreshed);
 
-      await manager.bootstrapLiveSession();
+      await manager.bootstrapLiveSession(accountId);
 
       expect(brokerAuth.refresh).toHaveBeenCalledTimes(1);
       expect(brokerAuth.login).toHaveBeenCalledTimes(1);
-      expect(manager.getActiveSession()).toBe(refreshed);
+      expect(manager.getActiveSession(accountId)).toBe(refreshed);
     });
 
     it('logs in with the bootstrap seed when nothing was ever restored', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
 
-      await manager.bootstrapLiveSession();
+      await manager.bootstrapLiveSession(accountId);
 
       expect(brokerAuth.login).toHaveBeenCalledTimes(1);
-      expect(manager.getActiveSession()).toBe(session);
+      expect(manager.getActiveSession(accountId)).toBe(session);
     });
 
     it('never throws, even when the underlying login/refresh rejects', async () => {
       brokerAuth.login.mockRejectedValue(new Error('expired'));
 
-      await expect(manager.bootstrapLiveSession()).resolves.toBeUndefined();
-      expect(manager.getAuthState()).toBe('REAUTH_REQUIRED');
+      await expect(
+        manager.bootstrapLiveSession(accountId),
+      ).resolves.toBeUndefined();
+      expect(manager.getAuthState(accountId)).toBe('REAUTH_REQUIRED');
     });
   });
 
   describe('getLastRefreshedAt / getLastAuthEventAt', () => {
     it('are null before anything has happened', () => {
-      expect(manager.getLastRefreshedAt()).toBeNull();
-      expect(manager.getLastAuthEventAt()).toBeNull();
+      expect(manager.getLastRefreshedAt(accountId)).toBeNull();
+      expect(manager.getLastAuthEventAt(accountId)).toBeNull();
     });
 
     it('are set after a successful login', async () => {
       brokerAuth.login.mockResolvedValue(createSession());
-      await manager.login();
+      await manager.login(accountId);
 
-      expect(manager.getLastRefreshedAt()).toBeInstanceOf(Date);
-      expect(manager.getLastAuthEventAt()).toBeInstanceOf(Date);
+      expect(manager.getLastRefreshedAt(accountId)).toBeInstanceOf(Date);
+      expect(manager.getLastAuthEventAt(accountId)).toBeInstanceOf(Date);
     });
   });
 
   describe('isSessionValid', () => {
     it('is false with no active session', () => {
-      expect(manager.isSessionValid()).toBe(false);
+      expect(manager.isSessionValid(accountId)).toBe(false);
     });
 
     it('reflects IBrokerAuth.validateSession for the active session', async () => {
       const session = createSession();
       brokerAuth.login.mockResolvedValue(session);
-      await manager.login();
+      await manager.login(accountId);
 
       brokerAuth.validateSession.mockReturnValue(true);
-      expect(manager.isSessionValid()).toBe(true);
+      expect(manager.isSessionValid(accountId)).toBe(true);
 
       brokerAuth.validateSession.mockReturnValue(false);
-      expect(manager.isSessionValid()).toBe(false);
+      expect(manager.isSessionValid(accountId)).toBe(false);
+    });
+  });
+
+  describe('getAllActiveAccountIds', () => {
+    it('returns only accounts that currently hold a session, independently per account', async () => {
+      expect(manager.getAllActiveAccountIds()).toEqual([]);
+
+      brokerAuth.login.mockResolvedValue(createSession());
+      await manager.login('acc-1');
+      await manager.login('acc-2');
+
+      expect(manager.getAllActiveAccountIds().sort()).toEqual([
+        'acc-1',
+        'acc-2',
+      ]);
+
+      await manager.logout('acc-1');
+
+      expect(manager.getAllActiveAccountIds()).toEqual(['acc-2']);
     });
   });
 });

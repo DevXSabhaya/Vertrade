@@ -2,7 +2,6 @@ import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { InjectConnection } from '@nestjs/mongoose';
 import { ConnectionStates, type Connection } from 'mongoose';
-import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { BrokerHealthService } from '@modules/broker-health/broker-health.service';
 import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
 
@@ -16,8 +15,7 @@ interface ReadinessResponseBody {
   status: 'ok' | 'error';
   timestamp: string;
   database: 'connected' | 'disconnected';
-  tradingMode: 'PAPER' | 'LIVE';
-  /** Only meaningful (and only gates readiness) when tradingMode is LIVE — Paper mode never talks to a broker, so its health is reported for visibility only. */
+  /** Aggregated across every currently-active broker account session, deployment-wide — reported for visibility only. Trading mode is per-user now, so there is no single "is this deployment LIVE" gate to condition readiness on. */
   broker: HealthStatus;
 }
 
@@ -25,7 +23,6 @@ interface ReadinessResponseBody {
 export class HealthController {
   constructor(
     @InjectConnection() private readonly mongooseConnection: Connection,
-    private readonly tradingModeService: TradingModeService,
     private readonly brokerHealthService: BrokerHealthService,
   ) {}
 
@@ -55,32 +52,25 @@ export class HealthController {
   }
 
   /**
-   * Readiness — "is the process ready to actually serve real traffic,"
-   * which additionally depends on broker health when `TRADING_MODE=LIVE`
-   * (a live deployment with a disconnected/degraded broker is not truly
-   * ready even though the process itself is alive and the database is
-   * fine). In PAPER mode broker health can never gate readiness — Paper
-   * trading has no broker dependency — but the last-known snapshot is
-   * still reported for visibility. Reads `BrokerHealthService`'s
-   * already-computed snapshot (published by the Scheduler's on-demand
-   * health-check job) rather than triggering a new broker health check
-   * synchronously on every readiness probe.
+   * Readiness — "is the process ready to actually serve real traffic."
+   * Trading mode is per-user now (each user independently chooses
+   * Paper/Live and their own broker account), so there is no single
+   * deployment-wide "is this deployment LIVE" signal left to gate
+   * readiness on — broker health is reported here for visibility only.
+   * Reads `BrokerHealthService`'s already-computed snapshot (published by
+   * the Scheduler's on-demand health-check job) rather than triggering a
+   * new broker health check synchronously on every readiness probe.
    */
   @Get('ready')
   ready(@Res() res: Response): void {
     const databaseConnected = this.isDatabaseConnected();
-    const tradingMode = this.tradingModeService.getCurrentMode();
     const brokerStatus = this.brokerHealthService.getSnapshot().overallStatus;
-
-    const brokerBlocksReadiness =
-      tradingMode === 'LIVE' && brokerStatus !== HealthStatus.HEALTHY;
-    const ready = databaseConnected && !brokerBlocksReadiness;
+    const ready = databaseConnected;
 
     const body: ReadinessResponseBody = {
       status: ready ? 'ok' : 'error',
       timestamp: new Date().toISOString(),
       database: databaseConnected ? 'connected' : 'disconnected',
-      tradingMode,
       broker: brokerStatus,
     };
 
