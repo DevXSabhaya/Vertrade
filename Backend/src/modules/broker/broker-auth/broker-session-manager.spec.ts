@@ -318,8 +318,20 @@ describe('BrokerSessionManager', () => {
       const result = await manager.reconnectWithToken('fresh-token');
 
       expect(result).toBe(session);
-      expect(brokerAuth.login).toHaveBeenCalledWith('fresh-token');
+      expect(brokerAuth.login).toHaveBeenCalledWith('fresh-token', undefined);
       expect(manager.getAuthState()).toBe('DISCONNECTED');
+    });
+
+    it('forwards the supplied clientId alongside the override token', async () => {
+      const session = createSession();
+      brokerAuth.login.mockResolvedValue(session);
+
+      await manager.reconnectWithToken('fresh-token', 'USER-OWNED-ID');
+
+      expect(brokerAuth.login).toHaveBeenCalledWith(
+        'fresh-token',
+        'USER-OWNED-ID',
+      );
     });
   });
 

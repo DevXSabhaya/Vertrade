@@ -10,7 +10,11 @@ import { DhanExecutor } from './dhan/dhan.executor';
 import { LiveOrderSafetyGateService } from './live-order-safety-gate.service';
 import { RoutingOrderExecutor } from './routing-order-executor';
 import { ORDER_HTTP_CLIENT } from './dhan/dhan-executor.constants';
-import { ORDER_EXECUTOR } from './order-executor.constants';
+import {
+  ORDER_EXECUTOR,
+  PAPER_EXECUTION_CONFIG,
+} from './order-executor.constants';
+import { DEFAULT_PAPER_EXECUTION_CONFIG } from './models/paper-execution-config.model';
 
 /**
  * The Trading Engine depends only on the IOrderExecutor interface, never on
@@ -35,6 +39,14 @@ import { ORDER_EXECUTOR } from './order-executor.constants';
   ],
   providers: [
     PaperExecutor,
+    // Zero-effect by default (no slippage, always full-fill, never
+    // rejected) — every existing deterministic behavior of PaperExecutor is
+    // unchanged unless this binding is overridden with a non-default
+    // PaperExecutionConfig.
+    {
+      provide: PAPER_EXECUTION_CONFIG,
+      useValue: DEFAULT_PAPER_EXECUTION_CONFIG,
+    },
     BrokerCredentialsProvider,
     { provide: ORDER_HTTP_CLIENT, useClass: FetchBrokerHttpClient },
     LiveOrderSafetyGateService,

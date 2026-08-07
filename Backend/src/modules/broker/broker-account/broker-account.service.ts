@@ -122,6 +122,7 @@ export class BrokerAccountService {
     try {
       await this.brokerSessionManager.reconnectWithToken(
         credentials.accessToken,
+        credentials.clientId,
       );
     } catch (error) {
       await this.repository.recordConnectionOutcome(

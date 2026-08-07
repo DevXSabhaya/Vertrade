@@ -17,30 +17,6 @@ export function useTradingMode() {
   })
 }
 
-/**
- * Unlike trading mode, broker connect/auth state can genuinely change while
- * the app is open (session refresh, broker-side disconnect) — refetched
- * periodically rather than cached indefinitely.
- */
-export function useBrokerStatus() {
-  return useQuery({
-    queryKey: ['config', 'broker-status'],
-    queryFn: ({ signal }) => configService.brokerStatus(signal),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-  })
-}
-
-/** No broker account to summarize in PAPER mode — the backend already reflects that via `supported: false` rather than this hook special-casing it. */
-export function useBrokerAccountSummary() {
-  return useQuery({
-    queryKey: ['config', 'broker-account-summary'],
-    queryFn: ({ signal }) => configService.brokerAccountSummary(signal),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-  })
-}
-
 function invalidateAllQueries(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ['config'] })
   void queryClient.invalidateQueries({ queryKey: ['trades'] })
@@ -66,26 +42,3 @@ export function useSetTradingMode() {
   })
 }
 
-export function useConnectBroker() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => configService.connectBroker(),
-    onSuccess: () => invalidateAllQueries(queryClient),
-  })
-}
-
-export function useDisconnectBroker() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => configService.disconnectBroker(),
-    onSuccess: () => invalidateAllQueries(queryClient),
-  })
-}
-
-export function useReconnectBroker() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (accessToken: string) => configService.reconnectBroker(accessToken),
-    onSuccess: () => invalidateAllQueries(queryClient),
-  })
-}

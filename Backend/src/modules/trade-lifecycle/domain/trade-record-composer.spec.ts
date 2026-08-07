@@ -157,4 +157,58 @@ describe('composeTradeRecord', () => {
     // risk = 100-95 = 5, reward = 110-100 = 10 -> 2
     expect(record.riskReward).toBe(2);
   });
+
+  describe('charges / netPnl', () => {
+    it('computes entry-side-only charges for a still-open trade (no exit yet)', () => {
+      const record = composeTradeRecord(
+        snapshot(),
+        defaultTradeExtension('t1', new Date().toISOString()),
+        110,
+        1_700_000_010_000,
+      );
+      expect(record.charges.total).toBeGreaterThan(0);
+      expect(record.charges.stt).toBe(0); // sell-side only; this LONG hasn't exited.
+    });
+
+    it('reports netPnl as null for a trade with no fills yet', () => {
+      const record = composeTradeRecord(
+        snapshot({ entryFillPrice: null, filledQuantity: 0, openQuantity: 0 }),
+        defaultTradeExtension('t1', new Date().toISOString()),
+        null,
+        1_700_000_010_000,
+      );
+      expect(record.netPnl).toBeNull();
+      expect(record.charges.total).toBe(0);
+    });
+
+    it('computes netPnl as unrealizedPnl minus charges for an open, filled trade', () => {
+      const record = composeTradeRecord(
+        snapshot(),
+        defaultTradeExtension('t1', new Date().toISOString()),
+        110,
+        1_700_000_010_000,
+      );
+      // unrealizedPnl = (110 - 100) * 50 = 500
+      expect(record.unrealizedPnl).toBe(500);
+      expect(record.netPnl).toBeCloseTo(500 - record.charges.total, 5);
+    });
+
+    it('includes exit-side charges (STT etc.) once the trade has exited', () => {
+      const record = composeTradeRecord(
+        snapshot({
+          state: TradeState.COMPLETED,
+          exitPrice: 110,
+          exitedQuantity: 50,
+          exitProceeds: 5_500,
+          openQuantity: 0,
+          realizedPnl: 500,
+        }),
+        defaultTradeExtension('t1', new Date().toISOString()),
+        null,
+        1_700_000_010_000,
+      );
+      expect(record.charges.stt).toBeGreaterThan(0);
+      expect(record.netPnl).toBeCloseTo(500 - record.charges.total, 5);
+    });
+  });
 });

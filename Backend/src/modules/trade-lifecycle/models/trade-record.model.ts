@@ -4,6 +4,7 @@ import type { TradingMode } from '@modules/trading-engine/domain/trading-mode.ty
 import type { TradeLifecycleStage } from './trade-lifecycle-stage.enum';
 import type { TrailingConfiguration } from './trailing-configuration.model';
 import type { ExitReason } from './exit-reason.enum';
+import type { TradeCharges } from '../domain/trade-charges.util';
 
 /** Re-exported for existing callers — canonical definition now lives in `trading-engine/domain` since `Trade`/`CreateTradeParams` need it directly (see that file's own docstring). */
 export type { TradingMode };
@@ -44,6 +45,10 @@ export interface TradeRecord {
   readonly riskReward: number | null;
   readonly realizedPnl: number | null;
   readonly unrealizedPnl: number | null;
+  /** Estimated transaction costs incurred so far — entry-side only while the trade is still open, entry+exit once it has exited. Representative discount-broker rates, not tax-compliance-accurate (see `calculateTradeCharges`). */
+  readonly charges: TradeCharges;
+  /** `(realizedPnl ?? 0) + (unrealizedPnl ?? 0) - charges.total` — null until the trade has at least one fill, since "net profit" is meaningless before that. */
+  readonly netPnl: number | null;
   readonly exitReason: ExitReason | null;
   readonly brokerMetadata: Readonly<Record<string, unknown>>;
   readonly mode: TradingMode;

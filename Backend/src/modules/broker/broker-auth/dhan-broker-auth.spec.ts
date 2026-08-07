@@ -193,6 +193,22 @@ describe('DhanBrokerAuth', () => {
         }),
       );
     });
+
+    it('uses the override clientId for the resulting session instead of the env-configured one', async () => {
+      httpClient.request.mockResolvedValue({ status: 200, body: {} });
+
+      const session = await auth.login('freshly-pasted-token', 'USER-OWNED-ID');
+
+      expect(session.clientCode).toBe('USER-OWNED-ID');
+    });
+
+    it('falls back to the env-configured clientId when no override clientId is given', async () => {
+      httpClient.request.mockResolvedValue({ status: 200, body: {} });
+
+      const session = await auth.login('freshly-pasted-token');
+
+      expect(session.clientCode).toBe('C123');
+    });
   });
 
   describe('logout', () => {

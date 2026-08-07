@@ -6,6 +6,8 @@ import type { IClock } from '@shared/clock/clock.interface';
 import { TradingEngineService } from '@modules/trading-engine/trading-engine.service';
 import { TradeStateTransitions } from '@modules/trading-engine/domain/trade-state-transitions';
 import { StopLossHitEvent } from '@modules/trading-engine/events/stop-loss-hit.event';
+import { MarketCloseCompletedEvent } from '@modules/scheduler/events/market-close-completed.event';
+import { BrokerDisconnectedEvent } from '@modules/broker-health/events/broker-disconnected.event';
 import { TradeExtensionStore } from './trade-extension.store';
 import { PnLService } from './pnl.service';
 import { composeTradeRecord } from './domain/trade-record-composer';
@@ -45,6 +47,26 @@ export class ExitManager implements OnModuleInit {
         });
       },
     );
+
+    // Market close squares off every open trade (Paper and Live alike —
+    // this is an intraday platform) once the Scheduler's own cleanup step
+    // (stopping market data, expiring stale queue items) has finished.
+    this.eventBus.subscribe<MarketCloseCompletedEvent>(
+      'scheduler.market-close.completed',
+      () => {
+        void this.marketCloseExitAll();
+      },
+    );
+
+    // Broker disconnect only threatens LIVE trades — a Paper trade has no
+    // broker dependency and must never be force-exited just because the
+    // (unrelated, for Paper) broker connection dropped.
+    this.eventBus.subscribe<BrokerDisconnectedEvent>(
+      BrokerDisconnectedEvent.EVENT_NAME,
+      () => {
+        void this.brokerDisconnectExitAll();
+      },
+    );
   }
 
   async manualExit(tradeId: string): Promise<TradeRecord> {
@@ -82,6 +104,48 @@ export class ExitManager implements OnModuleInit {
       }
     }
     return results;
+  }
+
+  /** Best-effort square-off of every open trade (Paper and Live) at market close — one trade failing never stops the rest. */
+  private async marketCloseExitAll(): Promise<void> {
+    const openTrades = this.tradingEngineService
+      .getAllTrades()
+      .filter((trade) => !TradeStateTransitions.isTerminal(trade.state));
+
+    for (const trade of openTrades) {
+      try {
+        await this.exitWithReason(trade.id, ExitReason.MARKET_CLOSE);
+      } catch (error) {
+        this.logger.error(
+          `Market-close exit failed for trade ${trade.id}: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+      }
+    }
+  }
+
+  /** Best-effort exit of every open LIVE trade when the broker connection drops — Paper trades are unaffected, since they have no broker dependency. */
+  private async brokerDisconnectExitAll(): Promise<void> {
+    const openLiveTrades = this.tradingEngineService
+      .getAllTrades()
+      .filter(
+        (trade) =>
+          trade.mode === 'LIVE' &&
+          !TradeStateTransitions.isTerminal(trade.state),
+      );
+
+    for (const trade of openLiveTrades) {
+      try {
+        await this.exitWithReason(trade.id, ExitReason.BROKER_DISCONNECT);
+      } catch (error) {
+        this.logger.error(
+          `Broker-disconnect exit failed for trade ${trade.id}: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+      }
+    }
   }
 
   async requestPartialExit(

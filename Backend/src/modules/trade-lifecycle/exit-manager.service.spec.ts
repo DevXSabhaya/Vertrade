@@ -8,6 +8,8 @@ import { TradeState } from '@modules/trading-engine/domain/trade-state.enum';
 import { OrderResponse } from '@modules/broker/executors/models/order-response.model';
 import { OrderStatus } from '@modules/broker/executors/models/order-status.enum';
 import { StopLossHitEvent } from '@modules/trading-engine/events/stop-loss-hit.event';
+import { MarketCloseCompletedEvent } from '@modules/scheduler/events/market-close-completed.event';
+import { BrokerDisconnectedEvent } from '@modules/broker-health/events/broker-disconnected.event';
 import { ExitManager } from './exit-manager.service';
 import { TradeExtensionStore } from './trade-extension.store';
 import { PnLService } from './pnl.service';
@@ -156,6 +158,64 @@ describe('ExitManager', () => {
       );
       const record = await manager.brokerDisconnectExit(snapshot.id);
       expect(record.exitReason).toBe(ExitReason.BROKER_DISCONNECT);
+    });
+  });
+
+  describe('auto-exit on MarketCloseCompletedEvent', () => {
+    it('exits every open trade (Paper and Live alike) with reason MARKET_CLOSE', async () => {
+      const t1 = await activeTrade({
+        instrumentToken: 'TOKEN-1',
+        mode: 'PAPER',
+      });
+      const t2 = await activeTrade({
+        instrumentToken: 'TOKEN-2',
+        mode: 'LIVE',
+      });
+      executor.exitPosition.mockResolvedValue(
+        new OrderResponse('X-1', OrderStatus.FILLED, 50, 105, new Date()),
+      );
+
+      handlers['scheduler.market-close.completed'].forEach((h) =>
+        h(new MarketCloseCompletedEvent(0, 0)),
+      );
+      // marketCloseExitAll exits every open trade sequentially, each
+      // involving several chained awaits — flush macrotasks, not just a
+      // few microtasks, so both trades' exits have genuinely settled.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const ext1 = await extensionStore.get(t1.id);
+      const ext2 = await extensionStore.get(t2.id);
+      expect(ext1.exitReason).toBe(ExitReason.MARKET_CLOSE);
+      expect(ext2.exitReason).toBe(ExitReason.MARKET_CLOSE);
+    });
+  });
+
+  describe('auto-exit on BrokerDisconnectedEvent', () => {
+    it('exits open LIVE trades with reason BROKER_DISCONNECT but leaves PAPER trades untouched', async () => {
+      const paperTrade = await activeTrade({
+        instrumentToken: 'TOKEN-1',
+        mode: 'PAPER',
+      });
+      const liveTrade = await activeTrade({
+        instrumentToken: 'TOKEN-2',
+        mode: 'LIVE',
+      });
+      executor.exitPosition.mockResolvedValue(
+        new OrderResponse('X-1', OrderStatus.FILLED, 50, 105, new Date()),
+      );
+
+      handlers[BrokerDisconnectedEvent.EVENT_NAME].forEach((h) =>
+        h(new BrokerDisconnectedEvent('session expired')),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const liveExt = await extensionStore.get(liveTrade.id);
+      expect(liveExt.exitReason).toBe(ExitReason.BROKER_DISCONNECT);
+
+      const paperTradeSnapshot = tradingEngineService.getTrade(paperTrade.id);
+      expect(paperTradeSnapshot.state).not.toBe(TradeState.COMPLETED);
     });
   });
 

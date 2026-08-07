@@ -131,7 +131,10 @@ describe('BrokerAccountService', () => {
 
       const result = await service.activate('user-1', 'acc-1');
 
-      expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith('T1');
+      expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith(
+        'T1',
+        'C1',
+      );
       expect(repository.deactivateAllForUser).toHaveBeenCalledWith('user-1');
       expect(repository.markActive).toHaveBeenCalledWith('user-1', 'acc-1');
       expect(result.isActive).toBe(true);
@@ -192,7 +195,10 @@ describe('BrokerAccountService', () => {
 
       await service.reconnect('user-1', 'acc-1');
 
-      expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith('T1');
+      expect(sessionManager.reconnectWithToken).toHaveBeenCalledWith(
+        'T1',
+        'C1',
+      );
     });
   });
 

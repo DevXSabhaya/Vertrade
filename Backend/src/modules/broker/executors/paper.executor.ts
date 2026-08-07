@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { EVENT_BUS } from '@core/event-bus/event-bus.constants';
 import type { IEventBus } from '@core/event-bus/event-bus.interface';
 import { MarketPriceUpdatedEvent } from '@shared/events/market-price-updated.event';
@@ -10,7 +10,12 @@ import { OrderResponse } from './models/order-response.model';
 import { OrderStatus } from './models/order-status.enum';
 import { OrderPriceType } from './models/order-price-type.enum';
 import { OrderSide } from './models/order-side.enum';
+import {
+  DEFAULT_PAPER_EXECUTION_CONFIG,
+  type PaperExecutionConfig,
+} from './models/paper-execution-config.model';
 import type { PaperFillInstruction } from './paper-fill-instruction';
+import { PAPER_EXECUTION_CONFIG } from './order-executor.constants';
 import { OrderPlacementException } from './exceptions/order-placement.exception';
 import { OrderModificationException } from './exceptions/order-modification.exception';
 import { OrderCancellationException } from './exceptions/order-cancellation.exception';
@@ -41,8 +46,10 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
 /**
  * Fully deterministic simulator: no randomness, no timers, no hidden delays.
  * Every fill outcome is either explicitly queued by the caller (queueNextFill)
- * or derived from an explicitly-set market price (setMarketPrice) — never
- * guessed. Must satisfy the exact same contract tests as DhanExecutor.
+ * or derived from an explicitly-set market price (setMarketPrice) plus the
+ * fixed, disclosed adjustments in `PaperExecutionConfig` (slippage/partial-
+ * fill/rejection thresholds — see that model's docstring) — never guessed,
+ * never random. Must satisfy the exact same contract tests as DhanExecutor.
  *
  * Every public method is declared `async` even though nothing inside ever
  * awaits anything — that's deliberate: it guarantees a synchronous throw
@@ -65,10 +72,17 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
 export class PaperExecutor implements IOrderExecutor {
   private readonly orders = new Map<string, PaperOrderRecord>();
   private readonly marketPrices = new Map<string, number>();
+  private readonly config: PaperExecutionConfig;
   private queuedFill: PaperFillInstruction | null = null;
   private sequence = 0;
 
-  constructor(@Inject(EVENT_BUS) eventBus: IEventBus) {
+  constructor(
+    @Inject(EVENT_BUS) eventBus: IEventBus,
+    @Optional()
+    @Inject(PAPER_EXECUTION_CONFIG)
+    config?: PaperExecutionConfig,
+  ) {
+    this.config = config ?? DEFAULT_PAPER_EXECUTION_CONFIG;
     eventBus.subscribe<MarketPriceUpdatedEvent>(
       MarketPriceUpdatedEvent.EVENT_NAME,
       (event) => this.setMarketPrice(event.instrumentToken, event.price),
@@ -124,8 +138,37 @@ export class PaperExecutor implements IOrderExecutor {
       return this.toResponse(record);
     }
 
+    // An explicit queueNextFill() instruction always wins (deterministic
+    // test control, unchanged). Only when nothing was queued do the
+    // PaperExecutionConfig thresholds below apply — every existing caller
+    // that never sets a config keeps the exact pre-existing "always fills
+    // in full, at the exact price, never rejected" behavior.
+    if (!instruction) {
+      const rejection = this.checkExchangeRejection(request);
+      if (rejection) {
+        const record: PaperOrderRecord = {
+          brokerOrderId,
+          tradingSymbol: request.tradingSymbol,
+          instrumentToken: request.instrumentToken,
+          side: request.side,
+          quantity: request.quantity,
+          status: OrderStatus.REJECTED,
+          filledQuantity: 0,
+          averagePrice: null,
+          updatedAt: now,
+          message: rejection,
+        };
+        this.orders.set(brokerOrderId, record);
+        return this.toResponse(record);
+      }
+    }
+
     const fillPrice = this.resolveFillPrice(request, instruction);
-    const filledQuantity = instruction?.filledQuantity ?? request.quantity;
+    const requestedFillQuantity =
+      instruction?.filledQuantity ?? request.quantity;
+    const filledQuantity = instruction
+      ? requestedFillQuantity
+      : Math.min(requestedFillQuantity, this.config.maxFillQuantity);
     const status =
       instruction?.status === OrderStatus.PARTIALLY_FILLED ||
       filledQuantity < request.quantity
@@ -263,19 +306,61 @@ export class PaperExecutor implements IOrderExecutor {
     if (instruction?.fillPrice !== undefined) {
       return instruction.fillPrice;
     }
+    // LIMIT and SL both guarantee their specified price, exactly like a
+    // real broker — never worse. MARKET and SL_M fill at the prevailing
+    // market price, subject to slippage (see applySlippage).
     if (
-      request.priceType === OrderPriceType.LIMIT &&
+      (request.priceType === OrderPriceType.LIMIT ||
+        request.priceType === OrderPriceType.SL) &&
       request.price !== undefined
     ) {
       return request.price;
     }
     const marketPrice = this.marketPrices.get(request.instrumentToken);
-    if (marketPrice !== undefined) {
+    if (marketPrice === undefined) {
+      throw new OrderPlacementException(
+        `No market price available for instrument ${request.instrumentToken}. Call setMarketPrice() before placing a MARKET/SL_M order.`,
+      );
+    }
+    return this.applySlippage(marketPrice, request.side);
+  }
+
+  /** Deterministic, disclosed adjustment against the real market price — never random. A BUY fills slightly worse (higher); a SELL fills slightly worse (lower). Zero (the default) leaves the market price untouched. */
+  private applySlippage(marketPrice: number, side: OrderSide): number {
+    if (this.config.slippageBps === 0) {
       return marketPrice;
     }
-    throw new OrderPlacementException(
-      `No market price available for instrument ${request.instrumentToken}. Call setMarketPrice() before placing a MARKET order.`,
-    );
+    const adjustment = (marketPrice * this.config.slippageBps) / 10_000;
+    return side === OrderSide.BUY
+      ? marketPrice + adjustment
+      : marketPrice - adjustment;
+  }
+
+  /** Two realistic, deterministic rejection reasons — both opt-in via PaperExecutionConfig thresholds, both derived from the real request/market price, never randomly triggered. */
+  private checkExchangeRejection(request: OrderRequest): string | null {
+    if (request.quantity > this.config.maxOrderQuantity) {
+      return `Order quantity ${request.quantity} exceeds the exchange-permitted maximum of ${this.config.maxOrderQuantity}`;
+    }
+
+    const isPriceBound =
+      request.priceType === OrderPriceType.LIMIT ||
+      request.priceType === OrderPriceType.SL;
+    if (
+      isPriceBound &&
+      request.price !== undefined &&
+      Number.isFinite(this.config.priceBandPercent)
+    ) {
+      const marketPrice = this.marketPrices.get(request.instrumentToken);
+      if (marketPrice !== undefined) {
+        const deviationPercent =
+          (Math.abs(request.price - marketPrice) / marketPrice) * 100;
+        if (deviationPercent > this.config.priceBandPercent) {
+          return `Order price ${request.price} is outside the exchange price band (market: ${marketPrice}, allowed deviation: ${this.config.priceBandPercent}%)`;
+        }
+      }
+    }
+
+    return null;
   }
 
   private assertValidRequest(request: OrderRequest): void {
@@ -287,6 +372,21 @@ export class PaperExecutor implements IOrderExecutor {
       request.price === undefined
     ) {
       throw new OrderPlacementException('A LIMIT order requires a price');
+    }
+    if (
+      (request.priceType === OrderPriceType.SL ||
+        request.priceType === OrderPriceType.SL_M) &&
+      request.triggerPrice === undefined
+    ) {
+      throw new OrderPlacementException(
+        `A ${request.priceType} order requires a triggerPrice`,
+      );
+    }
+    if (
+      request.priceType === OrderPriceType.SL &&
+      request.price === undefined
+    ) {
+      throw new OrderPlacementException('An SL order requires a price');
     }
   }
 

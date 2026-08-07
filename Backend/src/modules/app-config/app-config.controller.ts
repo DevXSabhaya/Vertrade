@@ -3,56 +3,13 @@ import { ConfigService } from '@core/config/config.service';
 import { JwtAuthGuard } from '@modules/auth/guards/jwt-auth.guard';
 import { CurrentUser } from '@modules/auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '@modules/auth/models/authenticated-user.model';
-import { BrokerSessionManager } from '@modules/broker/broker-auth/broker-session-manager';
-import { BROKER_NAME_DHAN } from '@modules/broker/broker-auth/broker-auth.constants';
-import {
-  DhanAccountService,
-  type BrokerAccountSummary,
-} from '@modules/broker/broker-auth/dhan-account.service';
-import { BrokerHealthService } from '@modules/broker-health/broker-health.service';
-import { HealthStatus } from '@modules/broker-health/models/health-status.enum';
-import { InstrumentMasterService } from '@modules/instrument-master/instrument-master.service';
-import { BusinessException } from '@common/exceptions/business.exception';
 import { TradingModeService } from '@modules/trading-mode/trading-mode.service';
 import { SetTradingModeDto } from './dto/set-trading-mode.dto';
-import { ReconnectBrokerDto } from './dto/reconnect-broker.dto';
 
 interface TradingModeResponseBody {
   readonly tradingMode: 'PAPER' | 'LIVE';
   /** The env-configured (`TRADING_MODE`) boot-time default — surfaced so the UI can show when the persisted mode has been overridden away from it. */
   readonly defaultTradingMode: 'PAPER' | 'LIVE';
-}
-
-interface BrokerStatusResponseBody {
-  readonly tradingMode: 'PAPER' | 'LIVE';
-  readonly brokerName: string;
-  /**
-   * PAPER never talks to a broker at all — every field below reflects that
-   * constant, safe state rather than a stale/misleading value carried over
-   * from some other mode.
-   */
-  readonly connected: boolean;
-  readonly authStatus: HealthStatus;
-  readonly clientCode: string | null;
-  /** Whether this broker's market-data feed is currently healthy — separate from order-execution capability, since one can be up while the other is degraded. */
-  readonly marketDataCapability: HealthStatus;
-  /** Whether this broker's order-placement REST API is currently healthy. */
-  readonly orderExecutionCapability: HealthStatus;
-  readonly lastSuccessfulConnectionAt: string | null;
-  readonly lastHealthCheckAt: string | null;
-  /** When the active broker session's access token expires — null in PAPER or with no active session. */
-  readonly tokenExpiresAt: string | null;
-  /** When the session was last successfully established/renewed — null in PAPER or before any successful auth. */
-  readonly lastRefreshedAt: string | null;
-  readonly instrumentMasterStatus: HealthStatus;
-  readonly websocketStatus: HealthStatus;
-  /** AUTHENTICATED / DISCONNECTED / REAUTH_REQUIRED — REAUTH_REQUIRED means a human must call /config/broker/reconnect with a freshly console-generated token before any LIVE order can be placed. */
-  readonly authState: 'AUTHENTICATED' | 'DISCONNECTED' | 'REAUTH_REQUIRED';
-}
-
-interface BrokerAccountSummaryResponseBody extends BrokerAccountSummary {
-  readonly supported: boolean;
-  readonly reason: string | null;
 }
 
 /**
@@ -63,21 +20,20 @@ interface BrokerAccountSummaryResponseBody extends BrokerAccountSummary {
  * mode is active *before* they submit a trade, never inferring it
  * client-side.
  *
- * `broker-status` is authenticated — it echoes the broker client code, which
- * while not a secret is still account-identifying — and gives the frontend
- * something to render a broker connect/status panel from without ever
- * exposing API keys/passwords/TOTP secrets (those are env-sourced only,
- * never entered or displayed anywhere in the UI).
+ * Broker connection status/session management lives entirely under
+ * `/broker-accounts` (`BrokerAccountController`) — a per-user, ownership-scoped
+ * model. This controller deliberately never surfaces broker session identity,
+ * client codes, or balances: an earlier `/config/broker-status` /
+ * `/config/broker-account-summary` surface here reflected a single
+ * deployment-wide broker session to *any* authenticated user with no
+ * ownership check, which is exactly the kind of developer-credential leak
+ * the per-account model exists to prevent. Removed rather than patched.
  */
 @Controller('config')
 export class AppConfigController {
   constructor(
     private readonly configService: ConfigService,
     private readonly tradingModeService: TradingModeService,
-    private readonly brokerSessionManager: BrokerSessionManager,
-    private readonly brokerHealthService: BrokerHealthService,
-    private readonly dhanAccountService: DhanAccountService,
-    private readonly instrumentMasterService: InstrumentMasterService,
   ) {}
 
   @Get('trading-mode')
@@ -109,143 +65,5 @@ export class AppConfigController {
   ): Promise<TradingModeResponseBody> {
     await this.tradingModeService.setMode(dto.mode, user.email);
     return this.getTradingMode();
-  }
-
-  @Get('broker-status')
-  @UseGuards(JwtAuthGuard)
-  getBrokerStatus(): BrokerStatusResponseBody {
-    const tradingMode = this.tradingModeService.getCurrentMode();
-    const session = this.brokerSessionManager.getActiveSession();
-    const snapshot = this.brokerHealthService.getSnapshot();
-    const lastRefreshedAt = this.brokerSessionManager.getLastRefreshedAt();
-    const instrumentSnapshot = this.instrumentMasterService.getSnapshot();
-
-    if (tradingMode === 'PAPER') {
-      return {
-        tradingMode,
-        brokerName: BROKER_NAME_DHAN,
-        connected: this.brokerSessionManager.isSessionValid(),
-        authStatus: HealthStatus.UNKNOWN,
-        clientCode: session?.clientCode ?? null,
-        marketDataCapability: HealthStatus.UNKNOWN,
-        orderExecutionCapability: HealthStatus.UNKNOWN,
-        lastSuccessfulConnectionAt: null,
-        lastHealthCheckAt: null,
-        tokenExpiresAt: session?.expiresAt.toISOString() ?? null,
-        lastRefreshedAt: lastRefreshedAt?.toISOString() ?? null,
-        instrumentMasterStatus: HealthStatus.UNKNOWN,
-        websocketStatus: HealthStatus.UNKNOWN,
-        authState: this.brokerSessionManager.getAuthState(),
-      };
-    }
-
-    return {
-      tradingMode,
-      brokerName: BROKER_NAME_DHAN,
-      connected: this.brokerSessionManager.isSessionValid(),
-      authStatus: snapshot.authStatus,
-      clientCode: session?.clientCode ?? null,
-      marketDataCapability: snapshot.marketDataStatus,
-      orderExecutionCapability: snapshot.restApiStatus,
-      lastSuccessfulConnectionAt: snapshot.connectedSince,
-      lastHealthCheckAt: snapshot.timestamp,
-      tokenExpiresAt: session?.expiresAt.toISOString() ?? null,
-      lastRefreshedAt: lastRefreshedAt?.toISOString() ?? null,
-      instrumentMasterStatus:
-        instrumentSnapshot.instrumentCount > 0
-          ? HealthStatus.HEALTHY
-          : HealthStatus.DISCONNECTED,
-      websocketStatus: snapshot.websocketStatus,
-      authState: this.brokerSessionManager.getAuthState(),
-    };
-  }
-
-  /**
-   * Triggers `BrokerSessionManager.ensureSession()` — logs in if there is no
-   * session, or transparently refreshes an existing-but-stale one. Never
-   * collects/accepts credentials in the request body: the broker credentials
-   * this hits are always the ones already configured via env for this
-   * deployment (see `BrokerCredentialsProvider`), matching the rest of this
-   * codebase's "no broker secrets ever touch the UI" design. Login/refresh
-   * failures (invalid credentials, invalid TOTP, network/timeout) propagate
-   * as-is through the global exception filter — none of those exceptions
-   * carry secret values.
-   */
-  @Post('broker/connect')
-  @UseGuards(JwtAuthGuard)
-  async connectBroker(): Promise<BrokerStatusResponseBody> {
-    await this.brokerSessionManager.ensureSession();
-    return this.getBrokerStatus();
-  }
-
-  @Post('broker/disconnect')
-  @UseGuards(JwtAuthGuard)
-  async disconnectBroker(): Promise<BrokerStatusResponseBody> {
-    await this.brokerSessionManager.logout();
-    return this.getBrokerStatus();
-  }
-
-  /**
-   * The clean reconnect flow required once a Dhan access token has
-   * genuinely expired: DhanHQ's individual-API account type (no Partner/
-   * OAuth app) has no automated way to revive an expired token — an
-   * operator must generate a fresh one in the Dhan web console (My Profile
-   * -> Access DhanHQ APIs) and submit it here. Not gated to LIVE mode: this
-   * is exactly how an operator fixes an expired token *before* attempting
-   * to switch to LIVE, not only after. Never logs or echoes the token back.
-   */
-  @Post('broker/reconnect')
-  @UseGuards(JwtAuthGuard)
-  async reconnectBroker(
-    @Body() dto: ReconnectBrokerDto,
-  ): Promise<BrokerStatusResponseBody> {
-    await this.brokerSessionManager.reconnectWithToken(dto.accessToken);
-    return this.getBrokerStatus();
-  }
-
-  /**
-   * PAPER never has a broker account to summarize — `supported: false` with
-   * a reason, not fabricated zeros. In LIVE mode, every numeric field the
-   * real Dhan RMS call didn't return (or couldn't be parsed) is `null`,
-   * never guessed — see `DhanAccountService`'s own contract.
-   */
-  @Get('broker-account-summary')
-  @UseGuards(JwtAuthGuard)
-  async getBrokerAccountSummary(): Promise<BrokerAccountSummaryResponseBody> {
-    const emptySummary: BrokerAccountSummary = {
-      availableBalance: null,
-      usedMargin: null,
-      availableMargin: null,
-      todaysRealizedPnl: null,
-      unrealizedPnl: null,
-    };
-
-    if (this.tradingModeService.getCurrentMode() === 'PAPER') {
-      return {
-        ...emptySummary,
-        supported: false,
-        reason: 'Paper trading has no broker account — nothing to summarize.',
-      };
-    }
-
-    const session = this.brokerSessionManager.getActiveSession();
-    if (!session || !this.brokerSessionManager.isSessionValid()) {
-      return {
-        ...emptySummary,
-        supported: false,
-        reason: 'No active broker session — connect the broker first.',
-      };
-    }
-
-    const summary = await this.dhanAccountService.getFundsSummary(session);
-    return { ...summary, supported: true, reason: null };
-  }
-
-  private assertLiveMode(): void {
-    if (this.tradingModeService.getCurrentMode() !== 'LIVE') {
-      throw new BusinessException(
-        'Paper trading has no broker connection to manage — this deployment is in PAPER mode.',
-      );
-    }
   }
 }

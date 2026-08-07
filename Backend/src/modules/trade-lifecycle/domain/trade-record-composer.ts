@@ -4,6 +4,7 @@ import type { TradeExtension } from '../models/trade-extension.model';
 import type { TradeRecord } from '../models/trade-record.model';
 import { deriveTradeLifecycleStage } from './trade-lifecycle-mapper';
 import { calculateRiskReward } from './risk-reward.util';
+import { calculateTradeCharges } from './trade-charges.util';
 
 /**
  * Builds the composed "Trade Aggregate" read model on demand — never
@@ -23,6 +24,29 @@ export function composeTradeRecord(
 ): TradeRecord {
   const targetsHit = snapshot.targets.length - snapshot.remainingTargets.length;
   const currentTarget = targetsHit > 0 ? targetsHit : null;
+
+  const unrealizedPnl =
+    markPrice === null
+      ? null
+      : calculateUnrealizedPnl(
+          snapshot.direction,
+          snapshot.entryFillPrice,
+          snapshot.filledQuantity,
+          snapshot.openQuantity,
+          markPrice,
+        );
+
+  const entryValue = (snapshot.entryFillPrice ?? 0) * snapshot.filledQuantity;
+  const exitValue = (snapshot.exitPrice ?? 0) * snapshot.exitedQuantity;
+  const charges = calculateTradeCharges(
+    snapshot.direction,
+    entryValue,
+    exitValue,
+  );
+  const netPnl =
+    snapshot.filledQuantity === 0
+      ? null
+      : (snapshot.realizedPnl ?? 0) + (unrealizedPnl ?? 0) - charges.total;
 
   return {
     tradeId: snapshot.id,
@@ -57,16 +81,9 @@ export function composeTradeRecord(
       snapshot.targets[0],
     ),
     realizedPnl: snapshot.realizedPnl,
-    unrealizedPnl:
-      markPrice === null
-        ? null
-        : calculateUnrealizedPnl(
-            snapshot.direction,
-            snapshot.entryFillPrice,
-            snapshot.filledQuantity,
-            snapshot.openQuantity,
-            markPrice,
-          ),
+    unrealizedPnl,
+    charges,
+    netPnl,
     exitReason: extension.exitReason,
     brokerMetadata: extension.brokerMetadata,
     positionDurationMs: Math.max(

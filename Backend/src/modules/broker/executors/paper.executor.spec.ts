@@ -259,3 +259,261 @@ describe('PaperExecutor (determinism and simulation specifics)', () => {
     );
   });
 });
+
+function slOrder(
+  overrides: Partial<{
+    price: number;
+    triggerPrice: number;
+    quantity: number;
+  }> = {},
+): OrderRequest {
+  return new OrderRequest(
+    'NFO',
+    'NIFTY24500CE',
+    'TOKEN1',
+    OrderSide.SELL,
+    overrides.quantity ?? 50,
+    OrderPriceType.SL,
+    overrides.price ?? 95,
+    undefined,
+    overrides.triggerPrice ?? 95,
+  );
+}
+
+function slMarketOrder(
+  overrides: Partial<{ triggerPrice: number; quantity: number }> = {},
+): OrderRequest {
+  return new OrderRequest(
+    'NFO',
+    'NIFTY24500CE',
+    'TOKEN1',
+    OrderSide.SELL,
+    overrides.quantity ?? 50,
+    OrderPriceType.SL_M,
+    undefined,
+    undefined,
+    overrides.triggerPrice ?? 95,
+  );
+}
+
+describe('PaperExecutor SL / SL_M order types', () => {
+  let executor: PaperExecutor;
+
+  beforeEach(() => {
+    executor = new PaperExecutor(new EventEmitterEventBus(new EventEmitter2()));
+    executor.setMarketPrice('TOKEN1', 100);
+  });
+
+  it('rejects an SL order with no triggerPrice', async () => {
+    await expect(
+      executor.placeEntryOrder(
+        new OrderRequest(
+          'NFO',
+          'NIFTY24500CE',
+          'TOKEN1',
+          OrderSide.SELL,
+          50,
+          OrderPriceType.SL,
+          95,
+        ),
+      ),
+    ).rejects.toThrow(OrderPlacementException);
+  });
+
+  it('rejects an SL_M order with no triggerPrice', async () => {
+    await expect(
+      executor.placeEntryOrder(
+        new OrderRequest(
+          'NFO',
+          'NIFTY24500CE',
+          'TOKEN1',
+          OrderSide.SELL,
+          50,
+          OrderPriceType.SL_M,
+        ),
+      ),
+    ).rejects.toThrow(OrderPlacementException);
+  });
+
+  it('fills an SL order at its specified price, exactly like LIMIT', async () => {
+    const response = await executor.placeEntryOrder(slOrder({ price: 94 }));
+    expect(response.averagePrice).toBe(94);
+    expect(response.status).toBe(OrderStatus.FILLED);
+  });
+
+  it('fills an SL_M order at the current market price, exactly like MARKET', async () => {
+    const response = await executor.placeEntryOrder(slMarketOrder());
+    expect(response.averagePrice).toBe(100);
+    expect(response.status).toBe(OrderStatus.FILLED);
+  });
+});
+
+describe('PaperExecutor execution realism (PaperExecutionConfig)', () => {
+  it('defaults to zero slippage, full fills, and no rejections when no config is provided', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(marketRequest());
+    expect(response.averagePrice).toBe(100);
+    expect(response.status).toBe(OrderStatus.FILLED);
+    expect(response.filledQuantity).toBe(50);
+  });
+
+  it('applies slippage unfavorably: worse (higher) fill for a BUY', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 100,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: Infinity,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(marketRequest());
+    // 100 bps = 1% of 100 = 1 → BUY fills at 101, never at the raw tick price.
+    expect(response.averagePrice).toBe(101);
+  });
+
+  it('applies slippage unfavorably: worse (lower) fill for a SELL', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 100,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: Infinity,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(slMarketOrder());
+    expect(response.averagePrice).toBe(99);
+  });
+
+  it('never applies slippage to a LIMIT/SL fill — the specified price is always honored', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 500,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: Infinity,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(slOrder({ price: 94 }));
+    expect(response.averagePrice).toBe(94);
+  });
+
+  it('partially fills an order exceeding maxFillQuantity, leaving the remainder unfilled', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 0,
+        maxFillQuantity: 20,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: Infinity,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(
+      marketRequest({ quantity: 50 }),
+    );
+    expect(response.status).toBe(OrderStatus.PARTIALLY_FILLED);
+    expect(response.filledQuantity).toBe(20);
+  });
+
+  it('rejects an order exceeding maxOrderQuantity outright', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 0,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: 30,
+        priceBandPercent: Infinity,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(
+      marketRequest({ quantity: 50 }),
+    );
+    expect(response.status).toBe(OrderStatus.REJECTED);
+    expect(response.filledQuantity).toBe(0);
+  });
+
+  it('rejects a LIMIT order priced outside the configured price band', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 0,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: 2,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(
+      new OrderRequest(
+        'NFO',
+        'NIFTY24500CE',
+        'TOKEN1',
+        OrderSide.BUY,
+        50,
+        OrderPriceType.LIMIT,
+        110, // 10% away from the market price of 100 — outside a 2% band.
+      ),
+    );
+    expect(response.status).toBe(OrderStatus.REJECTED);
+  });
+
+  it('accepts a LIMIT order priced within the configured price band', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 0,
+        maxFillQuantity: Infinity,
+        maxOrderQuantity: Infinity,
+        priceBandPercent: 2,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    const response = await executor.placeEntryOrder(
+      new OrderRequest(
+        'NFO',
+        'NIFTY24500CE',
+        'TOKEN1',
+        OrderSide.BUY,
+        50,
+        OrderPriceType.LIMIT,
+        101,
+      ),
+    );
+    expect(response.status).toBe(OrderStatus.FILLED);
+  });
+
+  it('an explicit queueNextFill() instruction always overrides the config — deterministic test control is never weakened', async () => {
+    const executor = new PaperExecutor(
+      new EventEmitterEventBus(new EventEmitter2()),
+      {
+        slippageBps: 500,
+        maxFillQuantity: 1,
+        maxOrderQuantity: 1,
+        priceBandPercent: 0,
+      },
+    );
+    executor.setMarketPrice('TOKEN1', 100);
+    executor.queueNextFill({
+      status: OrderStatus.FILLED,
+      fillPrice: 100,
+      filledQuantity: 50,
+    });
+
+    const response = await executor.placeEntryOrder(
+      marketRequest({ quantity: 50 }),
+    );
+    expect(response.status).toBe(OrderStatus.FILLED);
+    expect(response.filledQuantity).toBe(50);
+    expect(response.averagePrice).toBe(100);
+  });
+});
