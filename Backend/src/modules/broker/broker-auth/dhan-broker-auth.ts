@@ -99,9 +99,13 @@ export class DhanBrokerAuth implements IBrokerAuth {
     @Inject(BROKER_HTTP_CLIENT) private readonly httpClient: IBrokerHttpClient,
   ) {}
 
-  async login(overrideAccessToken?: string): Promise<BrokerSession> {
+  async login(
+    overrideAccessToken?: string,
+    overrideClientId?: string,
+  ): Promise<BrokerSession> {
     const credentials = this.credentialsProvider.getCredentials();
     const accessToken = overrideAccessToken ?? credentials.getAccessToken();
+    const clientId = overrideClientId ?? credentials.clientId;
 
     const response = await this.safeRequest(() =>
       this.httpClient.request<unknown>({
@@ -112,7 +116,7 @@ export class DhanBrokerAuth implements IBrokerAuth {
     );
 
     this.assertSuccess(response.status, response.body);
-    return this.toSession(credentials.clientId, accessToken);
+    return this.toSession(clientId, accessToken);
   }
 
   async refresh(session: BrokerSession): Promise<BrokerSession> {

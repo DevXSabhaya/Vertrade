@@ -5,7 +5,6 @@ import { renderWithProviders } from '@/test/test-utils'
 import Account from './Account'
 import { accountService } from '@/services/account.service'
 import { configService } from '@/services/config.service'
-import type { BrokerStatusResponse } from '@/types/config'
 
 vi.mock('@/services/account.service')
 vi.mock('@/services/config.service')
@@ -26,40 +25,12 @@ function accountSummary() {
   }
 }
 
-function brokerStatus(overrides: Partial<BrokerStatusResponse> = {}): BrokerStatusResponse {
-  return {
-    tradingMode: 'PAPER',
-    brokerName: 'dhan',
-    connected: false,
-    authStatus: 'UNKNOWN',
-    clientCode: null,
-    marketDataCapability: 'UNKNOWN',
-    orderExecutionCapability: 'UNKNOWN',
-    lastSuccessfulConnectionAt: null,
-    lastHealthCheckAt: null,
-    tokenExpiresAt: null,
-    lastRefreshedAt: null,
-    authState: 'DISCONNECTED',
-    ...overrides,
-  } as BrokerStatusResponse
-}
-
 describe('Account page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(configService.tradingMode).mockResolvedValue({
       tradingMode: 'PAPER',
       defaultTradingMode: 'PAPER',
-    })
-    vi.mocked(configService.brokerStatus).mockResolvedValue(brokerStatus())
-    vi.mocked(configService.brokerAccountSummary).mockResolvedValue({
-      supported: false,
-      reason: 'Paper trading has no broker account — nothing to summarize.',
-      availableBalance: null,
-      usedMargin: null,
-      availableMargin: null,
-      todaysRealizedPnl: null,
-      unrealizedPnl: null,
     })
   })
 
@@ -114,92 +85,12 @@ describe('Account page', () => {
     expect(accountService.resetBalance).not.toHaveBeenCalled()
   })
 
-  it('shows broker connection status sourced from the backend, never a hardcoded value', async () => {
-    vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
-    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'LIVE', defaultTradingMode: 'PAPER' })
-    vi.mocked(configService.brokerStatus).mockResolvedValue(
-      brokerStatus({
-        tradingMode: 'LIVE',
-        connected: true,
-        authStatus: 'HEALTHY',
-        clientCode: 'ABC123',
-        marketDataCapability: 'HEALTHY',
-        orderExecutionCapability: 'HEALTHY',
-        lastSuccessfulConnectionAt: '2026-01-01T09:00:00.000Z',
-        lastHealthCheckAt: '2026-01-01T09:05:00.000Z',
-        authState: 'AUTHENTICATED',
-      }),
-    )
-    renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
-
-    expect((await screen.findAllByText('Connected')).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Authenticated').length).toBeGreaterThan(0)
-    expect(screen.getByText('ABC123')).toBeInTheDocument()
-  })
-
-  it('shows paper mode as never connected to a real broker', async () => {
+  it('points to Broker Manager as the single place to manage broker connections, instead of duplicating broker status here', async () => {
     vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
     renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
 
-    expect(await screen.findByText('Not connected')).toBeInTheDocument()
-    expect(
-      screen.getByText(/Paper trading never connects to a real broker/),
-    ).toBeInTheDocument()
-  })
-
-  it('shows connect/disconnect/reconnect controls but never shows an account summary in PAPER mode', async () => {
-    vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
-    renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
-
-    await screen.findByText('Not connected')
-    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reconnect Broker' })).toBeInTheDocument()
-    expect(screen.queryByText('Account Summary')).not.toBeInTheDocument()
-  })
-
-  it('shows connect/disconnect controls and calls the backend action in LIVE mode', async () => {
-    vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
-    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'LIVE', defaultTradingMode: 'PAPER' })
-    vi.mocked(configService.brokerStatus).mockResolvedValue(
-      brokerStatus({ tradingMode: 'LIVE', connected: false }),
-    )
-    vi.mocked(configService.connectBroker).mockResolvedValue(
-      brokerStatus({ tradingMode: 'LIVE', connected: true, clientCode: 'ABC123' }),
-    )
-    const user = userEvent.setup()
-    renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
-
-    const connectButton = await screen.findByRole('button', { name: 'Connect' })
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled()
-
-    await user.click(connectButton)
-
-    await vi.waitFor(() => {
-      expect(configService.connectBroker).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  it('shows the real broker account summary in LIVE mode, marking unsupported fields clearly rather than fabricating them', async () => {
-    vi.mocked(accountService.summary).mockResolvedValue(accountSummary())
-    vi.mocked(configService.tradingMode).mockResolvedValue({ tradingMode: 'LIVE', defaultTradingMode: 'PAPER' })
-    vi.mocked(configService.brokerStatus).mockResolvedValue(
-      brokerStatus({ tradingMode: 'LIVE', connected: true }),
-    )
-    vi.mocked(configService.brokerAccountSummary).mockResolvedValue({
-      supported: true,
-      reason: null,
-      availableBalance: 45000.5,
-      usedMargin: 2000,
-      availableMargin: null,
-      todaysRealizedPnl: 1200.75,
-      unrealizedPnl: null,
-    })
-    renderWithProviders(<Account />, { initialEntries: ['/app/account'] })
-
-    expect(await screen.findByText('Account Summary')).toBeInTheDocument()
-    expect(screen.getByText('₹45,000.50')).toBeInTheDocument()
-    expect(screen.getAllByText('Unsupported')).toHaveLength(2)
+    const link = await screen.findByRole('link', { name: /Manage broker connections/ })
+    expect(link).toHaveAttribute('href', '/app/brokers')
   })
 
   describe('Trading Mode selector', () => {

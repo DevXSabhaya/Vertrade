@@ -9,37 +9,3 @@ export interface TradingModeResponse {
 export interface SetTradingModeRequest {
   readonly mode: TradingMode
 }
-
-export type BrokerAuthStatus =
-  | 'HEALTHY'
-  | 'WARNING'
-  | 'DEGRADED'
-  | 'DISCONNECTED'
-  | 'RECOVERING'
-  | 'MAINTENANCE'
-  | 'UNKNOWN'
-
-export interface BrokerStatusResponse {
-  readonly tradingMode: TradingMode
-  readonly brokerName: string
-  readonly connected: boolean
-  readonly authStatus: BrokerAuthStatus
-  readonly clientCode: string | null
-  readonly marketDataCapability: BrokerAuthStatus
-  readonly orderExecutionCapability: BrokerAuthStatus
-  readonly lastSuccessfulConnectionAt: string | null
-  readonly lastHealthCheckAt: string | null
-  readonly tokenExpiresAt: string | null
-  readonly lastRefreshedAt: string | null
-  readonly authState: 'AUTHENTICATED' | 'DISCONNECTED' | 'REAUTH_REQUIRED'
-}
-
-export interface BrokerAccountSummaryResponse {
-  readonly supported: boolean
-  readonly reason: string | null
-  readonly availableBalance: number | null
-  readonly usedMargin: number | null
-  readonly availableMargin: number | null
-  readonly todaysRealizedPnl: number | null
-  readonly unrealizedPnl: number | null
-}

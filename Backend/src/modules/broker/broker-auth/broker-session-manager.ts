@@ -133,11 +133,14 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  async login(overrideAccessToken?: string): Promise<BrokerSession> {
+  async login(
+    overrideAccessToken?: string,
+    overrideClientId?: string,
+  ): Promise<BrokerSession> {
     if (this.pendingAuth) {
       return this.pendingAuth;
     }
-    this.pendingAuth = this.performLogin(overrideAccessToken);
+    this.pendingAuth = this.performLogin(overrideAccessToken, overrideClientId);
     try {
       return await this.pendingAuth;
     } finally {
@@ -146,15 +149,21 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Manual reconnect flow: an operator pastes a freshly console-generated
-   * Dhan access token (the only recovery path DhanHQ's individual-API
-   * account type supports once a token has genuinely expired — see
-   * DhanBrokerAuth's class docstring). Reuses the same single-flight guard
-   * as login()/refresh() so concurrent reconnect calls serialize onto one
-   * real attempt rather than each hitting Dhan independently.
+   * Manual reconnect flow: either an operator pasting a freshly
+   * console-generated Dhan access token (the only recovery path DhanHQ's
+   * individual-API account type supports once a token has genuinely
+   * expired — see DhanBrokerAuth's class docstring), or a per-user
+   * `BrokerAccount` being activated (which supplies its own `clientId` so
+   * the resulting session is correctly attributed instead of silently
+   * falling back to the env-configured one). Reuses the same single-flight
+   * guard as login()/refresh() so concurrent reconnect calls serialize onto
+   * one real attempt rather than each hitting Dhan independently.
    */
-  async reconnectWithToken(accessToken: string): Promise<BrokerSession> {
-    return this.login(accessToken);
+  async reconnectWithToken(
+    accessToken: string,
+    clientId?: string,
+  ): Promise<BrokerSession> {
+    return this.login(accessToken, clientId);
   }
 
   /**
@@ -203,10 +212,14 @@ export class BrokerSessionManager implements OnModuleInit, OnModuleDestroy {
 
   private async performLogin(
     overrideAccessToken?: string,
+    overrideClientId?: string,
   ): Promise<BrokerSession> {
     this.eventBus.publish(new BrokerLoginStartedEvent());
     try {
-      const session = await this.brokerAuth.login(overrideAccessToken);
+      const session = await this.brokerAuth.login(
+        overrideAccessToken,
+        overrideClientId,
+      );
       this.currentSession = session;
       this.reauthRequired = false;
       this.lastRefreshedAt = new Date();
